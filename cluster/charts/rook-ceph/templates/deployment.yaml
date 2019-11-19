@@ -208,6 +208,10 @@ spec:
           value: {{ .Values.mon.monOutTimeout }}
 {{- end }}
 {{- end }}
+{{- if .Values.unreachableNodeTolerationSeconds }}
+        - name: ROOK_UNREACHABLE_NODE_TOLERATION_SECONDS
+          value: {{ .Values.unreachableNodeTolerationSeconds }}
+{{- end }}
         resources:
 {{ toYaml .Values.resources | indent 10 }}
 {{- if .Values.useOperatorHostNetwork }}
