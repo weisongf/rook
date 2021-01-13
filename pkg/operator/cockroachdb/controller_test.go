@@ -16,13 +16,14 @@ limitations under the License.
 package cockroachdb
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	cockroachdbv1alpha1 "github.com/rook/rook/pkg/apis/cockroachdb.rook.io/v1alpha1"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	testop "github.com/rook/rook/pkg/operator/test"
@@ -38,7 +39,7 @@ import (
 func TestValidateClusterSpec(t *testing.T) {
 	// invalid node count
 	spec := cockroachdbv1alpha1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{NodeCount: 0},
+		Storage: rookv1.StorageScopeSpec{NodeCount: 0},
 		Network: cockroachdbv1alpha1.NetworkSpec{
 			Ports: []cockroachdbv1alpha1.PortSpec{
 				{Name: "http", Port: 123},
@@ -52,7 +53,7 @@ func TestValidateClusterSpec(t *testing.T) {
 
 	// invalid cache percent
 	spec = cockroachdbv1alpha1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{NodeCount: 1},
+		Storage: rookv1.StorageScopeSpec{NodeCount: 1},
 		Network: cockroachdbv1alpha1.NetworkSpec{
 			Ports: []cockroachdbv1alpha1.PortSpec{
 				{Name: "http", Port: 123},
@@ -67,7 +68,7 @@ func TestValidateClusterSpec(t *testing.T) {
 
 	// invalid max SQL memory percent
 	spec = cockroachdbv1alpha1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{NodeCount: 1},
+		Storage: rookv1.StorageScopeSpec{NodeCount: 1},
 		Network: cockroachdbv1alpha1.NetworkSpec{
 			Ports: []cockroachdbv1alpha1.PortSpec{
 				{Name: "http", Port: 123},
@@ -82,7 +83,7 @@ func TestValidateClusterSpec(t *testing.T) {
 
 	// invalid port spec
 	spec = cockroachdbv1alpha1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{NodeCount: 1},
+		Storage: rookv1.StorageScopeSpec{NodeCount: 1},
 		Network: cockroachdbv1alpha1.NetworkSpec{
 			Ports: []cockroachdbv1alpha1.PortSpec{
 				{Name: "foo-port", Port: 123},
@@ -95,7 +96,7 @@ func TestValidateClusterSpec(t *testing.T) {
 
 	// valid spec
 	spec = cockroachdbv1alpha1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{NodeCount: 1},
+		Storage: rookv1.StorageScopeSpec{NodeCount: 1},
 		Network: cockroachdbv1alpha1.NetworkSpec{
 			Ports: []cockroachdbv1alpha1.PortSpec{
 				{Name: "http", Port: 123},
@@ -108,6 +109,7 @@ func TestValidateClusterSpec(t *testing.T) {
 }
 
 func TestOnAdd(t *testing.T) {
+	ctx := context.TODO()
 	namespace := "rook-cockroachdb-315"
 	cluster := &cockroachdbv1alpha1.Cluster{
 		ObjectMeta: metav1.ObjectMeta{
@@ -115,9 +117,9 @@ func TestOnAdd(t *testing.T) {
 			Namespace: namespace,
 		},
 		Spec: cockroachdbv1alpha1.ClusterSpec{
-			Storage: rookalpha.StorageScopeSpec{
+			Storage: rookv1.StorageScopeSpec{
 				NodeCount: 5,
-				Selection: rookalpha.Selection{
+				Selection: rookv1.Selection{
 					VolumeClaimTemplates: []v1.PersistentVolumeClaim{
 						{
 							ObjectMeta: metav1.ObjectMeta{
@@ -151,7 +153,7 @@ func TestOnAdd(t *testing.T) {
 	// keep track of if the cockroachdb init command was called
 	initCalled := false
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithCombinedOutput: func(debug bool, actionName string, command string, arg ...string) (string, error) {
+		MockExecuteCommandWithCombinedOutput: func(command string, arg ...string) (string, error) {
 			if strings.Contains(command, "cockroach") && arg[0] == "init" {
 				initCalled = true
 			}
@@ -161,13 +163,13 @@ func TestOnAdd(t *testing.T) {
 	}
 
 	// initialize the controller and its dependencies
-	clientset := testop.New(3)
+	clientset := testop.New(t, 3)
 	context := &clusterd.Context{Clientset: clientset, Executor: executor}
 	controller := NewClusterController(context, "rook/cockroachdb:mockTag")
 	controller.createInitRetryInterval = 1 * time.Millisecond
 
 	// in a background thread, simulate the pods running (fake statefulsets don't automatically do that)
-	go simulatePodsRunning(clientset, namespace, cluster.Spec.Storage.NodeCount)
+	go simulatePodsRunning(ctx, t, clientset, namespace, cluster.Spec.Storage.NodeCount)
 
 	// call onAdd given the specified cluster
 	controller.onAdd(cluster)
@@ -178,14 +180,14 @@ func TestOnAdd(t *testing.T) {
 	}
 
 	// verify client service
-	clientService, err := clientset.CoreV1().Services(namespace).Get("cockroachdb-public", metav1.GetOptions{})
+	clientService, err := clientset.CoreV1().Services(namespace).Get(ctx, "cockroachdb-public", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, clientService)
 	assert.Equal(t, v1.ServiceTypeClusterIP, clientService.Spec.Type)
 	assert.Equal(t, expectedServicePorts, clientService.Spec.Ports)
 
 	// verify replica Service
-	replicaService, err := clientset.CoreV1().Services(namespace).Get(appName, metav1.GetOptions{})
+	replicaService, err := clientset.CoreV1().Services(namespace).Get(ctx, appName, metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, replicaService)
 	assert.Equal(t, "None", replicaService.Spec.ClusterIP)
@@ -194,14 +196,14 @@ func TestOnAdd(t *testing.T) {
 	assert.Equal(t, "123", replicaService.Annotations["prometheus.io/port"])
 
 	// verify pod disruption budget
-	pdb, err := clientset.PolicyV1beta1().PodDisruptionBudgets(namespace).Get("cockroachdb-budget", metav1.GetOptions{})
+	pdb, err := clientset.PolicyV1beta1().PodDisruptionBudgets(namespace).Get(ctx, "cockroachdb-budget", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, pdb)
 	assert.Equal(t, createAppLabels(), pdb.Spec.Selector.MatchLabels)
 	assert.Equal(t, int32(1), pdb.Spec.MaxUnavailable.IntVal)
 
 	// verify stateful set
-	ss, err := clientset.AppsV1().StatefulSets(namespace).Get(appName, metav1.GetOptions{})
+	ss, err := clientset.AppsV1().StatefulSets(namespace).Get(ctx, appName, metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, ss)
 	assert.Equal(t, int32(5), *ss.Spec.Replicas)
@@ -230,7 +232,7 @@ func TestOnAdd(t *testing.T) {
 	assert.True(t, initCalled)
 }
 
-func simulatePodsRunning(clientset *fake.Clientset, namespace string, podCount int) {
+func simulatePodsRunning(ctx context.Context, t *testing.T, clientset *fake.Clientset, namespace string, podCount int) {
 	for i := 0; i < podCount; i++ {
 		pod := &v1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -240,6 +242,7 @@ func simulatePodsRunning(clientset *fake.Clientset, namespace string, podCount i
 			},
 			Status: v1.PodStatus{Phase: v1.PodRunning},
 		}
-		clientset.CoreV1().Pods(namespace).Create(pod)
+		_, err := clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
+		assert.NoError(t, err)
 	}
 }

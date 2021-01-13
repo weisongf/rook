@@ -27,7 +27,7 @@ kind: Namespace
 metadata:
   name: ` + namespace + `
 ---
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: rook-yugabytedb-operator
@@ -76,11 +76,10 @@ metadata:
   name: rook-yugabytedb-operator
   namespace: ` + namespace + `
 ---
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
   name: rook-yugabytedb-operator
-  namespace: ` + namespace + `
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -110,7 +109,7 @@ spec:
       serviceAccountName: rook-yugabytedb-operator
       containers:
       - name: rook-yugabytedb-operator
-        image: samkulkarni20/rook-yugabytedb:latest
+        image: rook/yugabytedb:master
         args: ["yugabytedb", "operator"]
         env:
         - name: POD_NAME
@@ -148,6 +147,13 @@ metadata:
 spec:
   master:
     replicas: ` + strconv.Itoa(replicaCount) + `
+    resource:
+      requests:
+        cpu: 300m
+        memory: 256Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
     network:
       ports:
         - name: yb-master-ui
@@ -164,6 +170,13 @@ spec:
             storage: 10Mi
   tserver:
     replicas: ` + strconv.Itoa(replicaCount) + `
+    resource:
+      requests:
+        cpu: 300m
+        memory: 256Mi
+      limits:
+        cpu: 300m
+        memory: 256Mi
     network:
       ports:
         - name: yb-tserver-ui

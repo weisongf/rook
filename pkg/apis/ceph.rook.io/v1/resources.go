@@ -17,7 +17,7 @@ limitations under the License.
 package v1
 
 import (
-	rook "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rook "github.com/rook/rook/pkg/apis/rook.io/v1"
 	v1 "k8s.io/api/core/v1"
 )
 
@@ -30,10 +30,16 @@ const (
 	ResourcesKeyOSD = "osd"
 	// ResourcesKeyPrepareOSD represents the name of resource in the CR for the osd prepare job
 	ResourcesKeyPrepareOSD = "prepareosd"
-	// ResourcesKeyRBDMirror represents the name of resource in the CR for the rbdmirror
-	ResourcesKeyRBDMirror = "rbdmirror"
+	// ResourcesKeyMDS represents the name of resource in the CR for the mds
+	ResourcesKeyMDS = "mds"
 	// ResourcesKeyCrashCollector represents the name of resource in the CR for the crash
 	ResourcesKeyCrashCollector = "crashcollector"
+	// ResourcesKeyLogCollector represents the name of resource in the CR for the log
+	ResourcesKeyLogCollector = "logcollector"
+	// ResourcesKeyRBDMirror represents the name of resource in the CR for the rbd mirror
+	ResourcesKeyRBDMirror = "rbdmirror"
+	// ResourcesKeyCleanup represents the name of resource in the CR for the cleanup
+	ResourcesKeyCleanup = "cleanup"
 )
 
 // GetMgrResources returns the placement for the MGR service
@@ -56,12 +62,17 @@ func GetPrepareOSDResources(p rook.ResourceSpec) v1.ResourceRequirements {
 	return p[ResourcesKeyPrepareOSD]
 }
 
-// GetRBDMirrorResources returns the placement for the RBD Mirrors
-func GetRBDMirrorResources(p rook.ResourceSpec) v1.ResourceRequirements {
-	return p[ResourcesKeyRBDMirror]
-}
-
 // GetCrashCollectorResources returns the placement for the crash daemon
 func GetCrashCollectorResources(p rook.ResourceSpec) v1.ResourceRequirements {
 	return p[ResourcesKeyCrashCollector]
+}
+
+// GetLogCollectorResources returns the placement for the crash daemon
+func GetLogCollectorResources(p rook.ResourceSpec) v1.ResourceRequirements {
+	return p[ResourcesKeyCrashCollector]
+}
+
+// GetCleanupResources returns the placement for the cleanup job
+func GetCleanupResources(p rook.ResourceSpec) v1.ResourceRequirements {
+	return p[ResourcesKeyCleanup]
 }

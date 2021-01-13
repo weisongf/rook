@@ -17,10 +17,9 @@ limitations under the License.
 package mds
 
 import (
+	"context"
 	"fmt"
 	"strconv"
-
-	apps "k8s.io/api/apps/v1"
 
 	"github.com/pkg/errors"
 	"github.com/rook/rook/pkg/operator/ceph/config"
@@ -40,11 +39,12 @@ caps mds = "allow"
 )
 
 func (c *Cluster) generateKeyring(m *mdsConfig) (string, error) {
+	ctx := context.TODO()
 	user := fmt.Sprintf("mds.%s", m.DaemonID)
 	access := []string{"osd", "allow *", "mds", "allow", "mon", "allow profile mds"}
 
 	// At present
-	s := keyring.GetSecretStore(c.context, c.fs.Namespace, &c.ownerRef)
+	s := keyring.GetSecretStore(c.context, c.clusterInfo, &c.ownerRef)
 
 	key, err := s.GenerateKey(user, access)
 	if err != nil {
@@ -52,7 +52,7 @@ func (c *Cluster) generateKeyring(m *mdsConfig) (string, error) {
 	}
 
 	// Delete legacy key store for upgrade from Rook v0.9.x to v1.0.x
-	err = c.context.Clientset.CoreV1().Secrets(c.fs.Namespace).Delete(m.ResourceName, &metav1.DeleteOptions{})
+	err = c.context.Clientset.CoreV1().Secrets(c.fs.Namespace).Delete(ctx, m.ResourceName, metav1.DeleteOptions{})
 	if err != nil {
 		if kerrors.IsNotFound(err) {
 			logger.Debugf("legacy mds key %s is already removed", m.ResourceName)
@@ -65,13 +65,8 @@ func (c *Cluster) generateKeyring(m *mdsConfig) (string, error) {
 	return keyring, s.CreateOrUpdate(m.ResourceName, keyring)
 }
 
-func (c *Cluster) associateKeyring(existingKeyring string, d *apps.Deployment) error {
-	s := keyring.GetSecretStoreForDeployment(c.context, d)
-	return s.CreateOrUpdate(d.GetName(), existingKeyring)
-}
-
 func (c *Cluster) setDefaultFlagsMonConfigStore(mdsID string) error {
-	monStore := config.GetMonStore(c.context, c.fs.Namespace)
+	monStore := config.GetMonStore(c.context, c.clusterInfo)
 	who := fmt.Sprintf("mds.%s", mdsID)
 	configOptions := make(map[string]string)
 
@@ -81,10 +76,9 @@ func (c *Cluster) setDefaultFlagsMonConfigStore(mdsID string) error {
 		configOptions["mds_cache_memory_limit"] = strconv.Itoa(int(mdsCacheMemoryLimit))
 	}
 
-	// These flags are obsoleted as of Nautilus
-	if !c.clusterInfo.CephVersion.IsAtLeastNautilus() {
-		configOptions["mds_standby_for_fscid"] = c.fsID
-		configOptions["mds_standby_replay"] = strconv.FormatBool(c.fs.Spec.MetadataServer.ActiveStandby)
+	// Set mds_join_fs flag to force mds daemon to join a specific fs
+	if c.clusterInfo.CephVersion.IsAtLeastOctopus() {
+		configOptions["mds_join_fs"] = c.fs.Name
 	}
 
 	for flag, val := range configOptions {

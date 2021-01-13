@@ -6,7 +6,7 @@
 # * restricted (for all logged in users)
 #
 # If we name it as `rook-ceph-operator`, it comes next to `restricted` PSP alphabetically,
-# and applies `restricted` capabilities to `rook-system`. Thats reason this is named with `00-rook-ceph-operator`,
+# and applies `restricted` capabilities to `rook-system`. That's reason this is named with `00-rook-ceph-operator`,
 # so it stays somewhere close to top and `rook-system` gets the intended PSP.
 #
 # More info on PSP ordering : https://kubernetes.io/docs/concepts/policy/pod-security-policy/#policy-order
@@ -15,6 +15,9 @@ apiVersion: policy/v1beta1
 kind: PodSecurityPolicy
 metadata:
   name: 00-rook-ceph-operator
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName:  'runtime/default'
 spec:
   privileged: true
   allowedCapabilities:
@@ -44,7 +47,6 @@ spec:
     - hostPath
     - flexVolume
   # allowedHostPaths can be set to Rook's known host volume mount points when they are fully-known
-  # directory-based OSDs make this hard to nail down
   # allowedHostPaths:
   #   - pathPrefix: "/run/udev"  # for OSD prep
   #     readOnly: false

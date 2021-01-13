@@ -17,18 +17,20 @@ limitations under the License.
 package sidecar
 
 import (
+	"context"
 	"fmt"
-	"github.com/ghodss/yaml"
-	cassandrav1alpha1 "github.com/rook/rook/pkg/apis/cassandra.rook.io/v1alpha1"
-	"github.com/rook/rook/pkg/operator/cassandra/constants"
-	"github.com/rook/rook/pkg/operator/cassandra/controller/util"
 	"io/ioutil"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ghodss/yaml"
+	cassandrav1alpha1 "github.com/rook/rook/pkg/apis/cassandra.rook.io/v1alpha1"
+	"github.com/rook/rook/pkg/operator/cassandra/constants"
+	"github.com/rook/rook/pkg/operator/cassandra/controller/util"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
@@ -45,7 +47,12 @@ const (
 	scyllaJMXPath              = "/usr/lib/scylla/jmx/scylla-jmx"
 
 	// Common
-	jolokiaPath            = constants.PluginDirName + "/" + "jolokia.jar"
+	jolokiaPath = constants.PluginDirName + "/" + "jolokia.jar"
+
+	jmxExporterPath       = constants.PluginDirName + "/" + "jmx_prometheus.jar"
+	jmxExporterConfigPath = configDirCassandra + "/" + "jmx_exporter_config.yaml"
+	jmxExporterPort       = "9180"
+
 	entrypointPath         = "/entrypoint.sh"
 	rackDCPropertiesFormat = "dc=%s" + "\n" + "rack=%s" + "\n" + "prefer_local=false" + "\n"
 )
@@ -134,11 +141,15 @@ func (m *MemberController) generateCassandraConfigFiles() error {
 		return fmt.Errorf("error setting HEAP_NEWSIZE: %s", err.Error())
 	}
 
-	// Add jolokia javaagent
-	jolokiaConfig := []byte(fmt.Sprintf(`JVM_OPTS="$JVM_OPTS %s"`,
-		getJolokiaConfig()))
+	// Generate jmx_agent_config
+	jmxConfig := ""
+	if _, err := os.Stat(jmxExporterConfigPath); !os.IsNotExist(err) {
+		jmxConfig = getJmxExporterConfig()
+	}
 
-	err = ioutil.WriteFile(cassandraEnvPath, append(cassandraEnv, jolokiaConfig...), os.ModePerm)
+	agentsConfig := []byte(fmt.Sprintf(`JVM_OPTS="$JVM_OPTS %s %s"`, getJolokiaConfig(), jmxConfig))
+
+	err = ioutil.WriteFile(cassandraEnvPath, append(cassandraEnv, agentsConfig...), os.ModePerm)
 	if err != nil {
 		return fmt.Errorf("error trying to write cassandra-env.sh: %s", err.Error())
 	}
@@ -233,7 +244,7 @@ func (m *MemberController) generateScyllaConfigFiles() error {
 
 // scyllaEntrypoint returns the entrypoint script for scylla
 func (m *MemberController) scyllaEntrypoint() (string, error) {
-
+	ctx := context.TODO()
 	// Get seeds
 	seeds, err := m.getSeeds()
 	if err != nil {
@@ -248,7 +259,7 @@ func (m *MemberController) scyllaEntrypoint() (string, error) {
 
 	// See if we need to run in developer mode
 	devMode := "0"
-	c, err := m.rookClient.CassandraV1alpha1().Clusters(m.namespace).Get(m.cluster, metav1.GetOptions{})
+	c, err := m.rookClient.CassandraV1alpha1().Clusters(m.namespace).Get(ctx, m.cluster, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("error getting cluster: %s", err.Error())
 	}
@@ -357,7 +368,7 @@ func (m *MemberController) overrideConfigValues(configText []byte) ([]byte, erro
 // in the Cluster. It does that by getting all ClusterIP services
 // of the current Cluster with the cassandra.rook.io/seed label
 func (m *MemberController) getSeeds() (string, error) {
-
+	ctx := context.TODO()
 	var services *corev1.ServiceList
 	var err error
 
@@ -365,8 +376,7 @@ func (m *MemberController) getSeeds() (string, error) {
 	sel := fmt.Sprintf("%s,%s=%s", constants.SeedLabel, constants.ClusterNameLabel, m.cluster)
 
 	for {
-
-		services, err = m.kubeClient.CoreV1().Services(m.namespace).List(metav1.ListOptions{LabelSelector: sel})
+		services, err = m.kubeClient.CoreV1().Services(m.namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
 		if err != nil {
 			return "", err
 		}
@@ -413,12 +423,20 @@ func getJolokiaConfig() string {
 	return fmt.Sprintf("-javaagent:%s=%s", jolokiaPath, strings.Join(cmd, ","))
 }
 
+func getJmxExporterConfig() string {
+	return fmt.Sprintf("-javaagent:%s=%s:%s", jmxExporterPath, jmxExporterPort, jmxExporterConfigPath)
+}
+
 // Merge YAMLs merges two arbitrary YAML structures on the top level.
 func mergeYAMLs(initialYAML, overrideYAML []byte) ([]byte, error) {
 
 	var initial, override map[string]interface{}
-	yaml.Unmarshal(initialYAML, &initial)
-	yaml.Unmarshal(overrideYAML, &override)
+	if err := yaml.Unmarshal(initialYAML, &initial); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal initial yaml. %v", err)
+	}
+	if err := yaml.Unmarshal(overrideYAML, &override); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal override yaml. %v", err)
+	}
 
 	if initial == nil {
 		initial = make(map[string]interface{})

@@ -18,6 +18,7 @@ limitations under the License.
 package provisioner
 
 import (
+	"context"
 	"io/ioutil"
 	"os"
 	"path"
@@ -25,29 +26,32 @@ import (
 	"testing"
 
 	"github.com/rook/rook/pkg/clusterd"
-	cephtest "github.com/rook/rook/pkg/daemon/ceph/test"
+	clienttest "github.com/rook/rook/pkg/daemon/ceph/client/test"
 	"github.com/rook/rook/pkg/operator/test"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
 	"github.com/stretchr/testify/assert"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
+	storage "k8s.io/api/storage/v1"
 	storagebeta "k8s.io/api/storage/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/sig-storage-lib-external-provisioner/controller"
+	"sigs.k8s.io/sig-storage-lib-external-provisioner/v6/controller"
 )
 
 func TestProvisionImage(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 	namespace := "ns"
 	configDir, _ := ioutil.TempDir("", "")
 	os.Setenv("POD_NAMESPACE", "rook-ceph")
 	defer os.Setenv("POD_NAMESPACE", "")
 	defer os.RemoveAll(configDir)
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			if strings.Contains(command, "ceph-authtool") {
-				cephtest.CreateConfigDir(path.Join(configDir, namespace))
+				err := clienttest.CreateConfigDir(path.Join(configDir, namespace))
+				assert.Nil(t, err)
 			}
 
 			if command == "rbd" && args[0] == "create" {
@@ -70,11 +74,12 @@ func TestProvisionImage(t *testing.T) {
 	}
 
 	provisioner := New(context, "foo.io")
-	volume := newVolumeOptions(newStorageClass("class-1", "foo.io/block", map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3", "dataBlockPool": ""}, v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "", "class-1", nil), v1.PersistentVolumeReclaimRetain)
+	volume := newProvisionOptions(newStorageClass("class-1", "foo.io/block", map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3", "dataBlockPool": ""}, v1.PersistentVolumeReclaimRetain), newClaim("claim-1", "uid-1-1", "class-1", "", "class-1", nil), v1.PersistentVolumeReclaimRetain)
 
-	pv, err := provisioner.Provision(volume)
+	pv, ps, err := provisioner.Provision(ctx, volume)
 	assert.Nil(t, err)
 
+	assert.Equal(t, controller.ProvisioningFinished, ps)
 	assert.Equal(t, "pvc-uid-1-1", pv.Name)
 	assert.NotNil(t, pv.Spec.PersistentVolumeSource.FlexVolume)
 	assert.Equal(t, v1.PersistentVolumeReclaimRetain, pv.Spec.PersistentVolumeReclaimPolicy)
@@ -86,11 +91,12 @@ func TestProvisionImage(t *testing.T) {
 	assert.Equal(t, "pvc-uid-1-1", pv.Spec.PersistentVolumeSource.FlexVolume.Options["image"])
 	assert.Equal(t, "", pv.Spec.PersistentVolumeSource.FlexVolume.Options["dataBlockPool"])
 
-	volume = newVolumeOptions(newStorageClass("class-1", "foo.io/block", map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3", "dataBlockPool": "iamdatapool"}, v1.PersistentVolumeReclaimRecycle), newClaim("claim-1", "uid-1-1", "class-1", "", "class-1", nil), v1.PersistentVolumeReclaimRecycle)
+	volume = newProvisionOptions(newStorageClass("class-1", "foo.io/block", map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3", "dataBlockPool": "iamdatapool"}, v1.PersistentVolumeReclaimRecycle), newClaim("claim-1", "uid-1-1", "class-1", "", "class-1", nil), v1.PersistentVolumeReclaimRecycle)
 
-	pv, err = provisioner.Provision(volume)
+	pv, ps, err = provisioner.Provision(ctx, volume)
 	assert.Nil(t, err)
 
+	assert.Equal(t, controller.ProvisioningFinished, ps)
 	assert.Equal(t, "pvc-uid-1-1", pv.Name)
 	assert.NotNil(t, pv.Spec.PersistentVolumeSource.FlexVolume)
 	assert.Equal(t, v1.PersistentVolumeReclaimRecycle, pv.Spec.PersistentVolumeReclaimPolicy)
@@ -104,16 +110,18 @@ func TestProvisionImage(t *testing.T) {
 }
 
 func TestReclaimPolicyForProvisionedImages(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 	namespace := "ns"
 	configDir, _ := ioutil.TempDir("", "")
 	os.Setenv("POD_NAMESPACE", "rook-system")
 	defer os.Setenv("POD_NAMESPACE", "")
 	defer os.RemoveAll(configDir)
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			if strings.Contains(command, "ceph-authtool") {
-				cephtest.CreateConfigDir(path.Join(configDir, namespace))
+				err := clienttest.CreateConfigDir(path.Join(configDir, namespace))
+				assert.Nil(t, err)
 			}
 
 			if command == "rbd" && args[0] == "create" {
@@ -137,10 +145,11 @@ func TestReclaimPolicyForProvisionedImages(t *testing.T) {
 
 	provisioner := New(context, "foo.io")
 	for _, reclaimPolicy := range []v1.PersistentVolumeReclaimPolicy{v1.PersistentVolumeReclaimDelete, v1.PersistentVolumeReclaimRetain, v1.PersistentVolumeReclaimRecycle} {
-		volume := newVolumeOptions(newStorageClass("class-1", "foo.io/block", map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3", "dataBlockPool": "iamdatapool"}, reclaimPolicy), newClaim("claim-1", "uid-1-1", "class-1", "", "class-1", nil), reclaimPolicy)
-		pv, err := provisioner.Provision(volume)
+		volume := newProvisionOptions(newStorageClass("class-1", "foo.io/block", map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3", "dataBlockPool": "iamdatapool"}, reclaimPolicy), newClaim("claim-1", "uid-1-1", "class-1", "", "class-1", nil), reclaimPolicy)
+		pv, ps, err := provisioner.Provision(ctx, volume)
 		assert.Nil(t, err)
 
+		assert.Equal(t, controller.ProvisioningFinished, ps)
 		assert.Equal(t, reclaimPolicy, pv.Spec.PersistentVolumeReclaimPolicy)
 	}
 }
@@ -189,12 +198,14 @@ func TestParseClassParametersInvalidOption(t *testing.T) {
 	assert.EqualError(t, err, "invalid option \"foo\" for volume plugin rookVolumeProvisioner")
 }
 
-func newVolumeOptions(storageClass *storagebeta.StorageClass, claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy) controller.VolumeOptions {
-	return controller.VolumeOptions{
-		PersistentVolumeReclaimPolicy: reclaimPolicy,
-		PVName:                        "pvc-" + string(claim.ObjectMeta.UID),
-		PVC:                           claim,
-		Parameters:                    storageClass.Parameters,
+func newProvisionOptions(storageClass *storagebeta.StorageClass, claim *v1.PersistentVolumeClaim, reclaimPolicy v1.PersistentVolumeReclaimPolicy) controller.ProvisionOptions {
+	return controller.ProvisionOptions{
+		StorageClass: &storage.StorageClass{
+			ReclaimPolicy: &reclaimPolicy,
+			Parameters:    storageClass.Parameters,
+		},
+		PVName: "pvc-" + string(claim.ObjectMeta.UID),
+		PVC:    claim,
 	}
 }
 

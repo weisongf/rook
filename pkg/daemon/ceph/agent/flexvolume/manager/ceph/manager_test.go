@@ -16,6 +16,7 @@ limitations under the License.
 package ceph
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -25,12 +26,12 @@ import (
 	"time"
 
 	"github.com/rook/rook/pkg/clusterd"
-	cephtest "github.com/rook/rook/pkg/daemon/ceph/test"
+	clienttest "github.com/rook/rook/pkg/daemon/ceph/client/test"
 	"github.com/rook/rook/pkg/operator/ceph/cluster/mon"
 	"github.com/rook/rook/pkg/operator/test"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
 	"github.com/stretchr/testify/assert"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -50,13 +51,13 @@ func TestInitLoadRBDModSingleMajor(t *testing.T) {
 	modprobeCalled := false
 
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			assert.Equal(t, "modinfo", command)
 			assert.Equal(t, "rbd", args[2])
 			modInfoCalled = true
 			return "single_major:Use a single major number for all rbd devices (default: false) (bool)", nil
 		},
-		MockExecuteCommand: func(debug bool, actionName string, command string, args ...string) error {
+		MockExecuteCommand: func(command string, args ...string) error {
 			assert.Equal(t, "modprobe", command)
 			assert.Equal(t, "rbd", args[0])
 			assert.Equal(t, "single_major=Y", args[1])
@@ -68,7 +69,8 @@ func TestInitLoadRBDModSingleMajor(t *testing.T) {
 	context := &clusterd.Context{
 		Executor: executor,
 	}
-	NewVolumeManager(context)
+	_, err := NewVolumeManager(context)
+	assert.NoError(t, err)
 	assert.True(t, modInfoCalled)
 	assert.True(t, modprobeCalled)
 }
@@ -78,13 +80,13 @@ func TestInitLoadRBDModNoSingleMajor(t *testing.T) {
 	modprobeCalled := false
 
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			assert.Equal(t, "modinfo", command)
 			assert.Equal(t, "rbd", args[2])
 			modInfoCalled = true
 			return "", nil
 		},
-		MockExecuteCommand: func(debug bool, actionName string, command string, args ...string) error {
+		MockExecuteCommand: func(command string, args ...string) error {
 			assert.Equal(t, "modprobe", command)
 			assert.Equal(t, 1, len(args))
 			assert.Equal(t, "rbd", args[0])
@@ -96,13 +98,15 @@ func TestInitLoadRBDModNoSingleMajor(t *testing.T) {
 	context := &clusterd.Context{
 		Executor: executor,
 	}
-	NewVolumeManager(context)
+	_, err := NewVolumeManager(context)
+	assert.NoError(t, err)
 	assert.True(t, modInfoCalled)
 	assert.True(t, modprobeCalled)
 }
 
 func TestAttach(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 	clusterNamespace := "testCluster"
 	configDir, _ := ioutil.TempDir("", "")
 	defer os.RemoveAll(configDir)
@@ -112,18 +116,20 @@ func TestAttach(t *testing.T) {
 		},
 	}
 	cm.Name = "rook-ceph-mon-endpoints"
-	clientset.CoreV1().ConfigMaps(clusterNamespace).Create(cm)
+	_, err := clientset.CoreV1().ConfigMaps(clusterNamespace).Create(ctx, cm, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	runCount := 1
 
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			if strings.Contains(command, "ceph-authtool") {
-				cephtest.CreateConfigDir(path.Join(configDir, clusterNamespace))
+				err := clienttest.CreateConfigDir(path.Join(configDir, clusterNamespace))
+				assert.Nil(t, err)
 			}
 			return "", nil
 		},
-		MockExecuteCommandWithTimeout: func(debug bool, timeout time.Duration, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
 			assert.Equal(t, "rbd", command)
 			assert.Equal(t, "map", args[0])
 			assert.Equal(t, fmt.Sprintf("testpool/image%d", runCount), args[1])
@@ -154,8 +160,8 @@ func TestAttach(t *testing.T) {
 			called:   0,
 		},
 	}
-	mon.CreateOrLoadClusterInfo(context, clusterNamespace, &metav1.OwnerReference{})
-
+	_, _, _, err = mon.CreateOrLoadClusterInfo(context, clusterNamespace, &metav1.OwnerReference{})
+	assert.NoError(t, err)
 	devicePath, err := vm.Attach("image1", "testpool", "admin", "never-gonna-give-you-up", clusterNamespace)
 	assert.Equal(t, "/dev/rbd3", devicePath)
 	assert.Nil(t, err)
@@ -187,7 +193,8 @@ func TestAttachAlreadyExists(t *testing.T) {
 }
 
 func TestDetach(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 	clusterNamespace := "testCluster"
 	configDir, _ := ioutil.TempDir("", "")
 	defer os.RemoveAll(configDir)
@@ -197,16 +204,18 @@ func TestDetach(t *testing.T) {
 		},
 	}
 	cm.Name = "rook-ceph-mon-endpoints"
-	clientset.CoreV1().ConfigMaps(clusterNamespace).Create(cm)
+	_, err := clientset.CoreV1().ConfigMaps(clusterNamespace).Create(ctx, cm, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			if strings.Contains(command, "ceph-authtool") {
-				cephtest.CreateConfigDir(path.Join(configDir, clusterNamespace))
+				err := clienttest.CreateConfigDir(path.Join(configDir, clusterNamespace))
+				assert.Nil(t, err)
 			}
 			return "", nil
 		},
-		MockExecuteCommandWithTimeout: func(debug bool, timeout time.Duration, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
 			assert.Equal(t, "rbd", command)
 			assert.Equal(t, "unmap", args[0])
 			assert.Equal(t, "testpool/image1", args[1])
@@ -232,13 +241,15 @@ func TestDetach(t *testing.T) {
 			called:   0,
 		},
 	}
-	mon.CreateOrLoadClusterInfo(context, clusterNamespace, &metav1.OwnerReference{})
-	err := vm.Detach("image1", "testpool", "admin", "", clusterNamespace, false)
+	_, _, _, err = mon.CreateOrLoadClusterInfo(context, clusterNamespace, &metav1.OwnerReference{})
+	assert.NoError(t, err)
+	err = vm.Detach("image1", "testpool", "admin", "", clusterNamespace, false)
 	assert.Nil(t, err)
 }
 
 func TestDetachCustomKeyring(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 	clusterNamespace := "testCluster"
 	configDir, _ := ioutil.TempDir("", "")
 	defer os.RemoveAll(configDir)
@@ -248,16 +259,18 @@ func TestDetachCustomKeyring(t *testing.T) {
 		},
 	}
 	cm.Name = "rook-ceph-mon-endpoints"
-	clientset.CoreV1().ConfigMaps(clusterNamespace).Create(cm)
+	_, err := clientset.CoreV1().ConfigMaps(clusterNamespace).Create(ctx, cm, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutput: func(debug bool, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
 			if strings.Contains(command, "ceph-authtool") {
-				cephtest.CreateConfigDir(path.Join(configDir, clusterNamespace))
+				err := clienttest.CreateConfigDir(path.Join(configDir, clusterNamespace))
+				assert.Nil(t, err)
 			}
 			return "", nil
 		},
-		MockExecuteCommandWithTimeout: func(debug bool, timeout time.Duration, actionName string, command string, args ...string) (string, error) {
+		MockExecuteCommandWithTimeout: func(timeout time.Duration, command string, args ...string) (string, error) {
 			assert.Equal(t, "rbd", command)
 			assert.Equal(t, "unmap", args[0])
 			assert.Equal(t, "testpool/image1", args[1])
@@ -283,8 +296,9 @@ func TestDetachCustomKeyring(t *testing.T) {
 			called:   0,
 		},
 	}
-	mon.CreateOrLoadClusterInfo(context, clusterNamespace, &metav1.OwnerReference{})
-	err := vm.Detach("image1", "testpool", "user1", "", clusterNamespace, false)
+	_, _, _, err = mon.CreateOrLoadClusterInfo(context, clusterNamespace, &metav1.OwnerReference{})
+	assert.NoError(t, err)
+	err = vm.Detach("image1", "testpool", "user1", "", clusterNamespace, false)
 	assert.Nil(t, err)
 }
 

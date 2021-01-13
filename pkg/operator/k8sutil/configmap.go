@@ -17,22 +17,55 @@ limitations under the License.
 package k8sutil
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 // DeleteConfigMap deletes a ConfigMap.
 func DeleteConfigMap(clientset kubernetes.Interface, cmName, namespace string, opts *DeleteOptions) error {
+	ctx := context.TODO()
 	k8sOpts := BaseKubernetesDeleteOptions()
-	delete := func() error { return clientset.CoreV1().ConfigMaps(namespace).Delete(cmName, k8sOpts) }
+	delete := func() error { return clientset.CoreV1().ConfigMaps(namespace).Delete(ctx, cmName, *k8sOpts) }
 	verify := func() error {
-		_, err := clientset.CoreV1().ConfigMaps(namespace).Get(cmName, metav1.GetOptions{})
+		_, err := clientset.CoreV1().ConfigMaps(namespace).Get(ctx, cmName, metav1.GetOptions{})
 		return err
 	}
 	resource := fmt.Sprintf("ConfigMap %s", cmName)
 	defaultWaitOptions := &WaitOptions{RetryCount: 20, RetryInterval: 2 * time.Second}
 	return DeleteResource(delete, verify, resource, opts, defaultWaitOptions)
+}
+
+// GetOperatorSetting gets the operator setting from ConfigMap or Env Var
+// returns defaultValue if setting is not found
+func GetOperatorSetting(clientset kubernetes.Interface, configMapName, settingName, defaultValue string) (string, error) {
+	// config must be in operator pod namespace
+	namespace := os.Getenv(PodNamespaceEnvVar)
+	ctx := context.TODO()
+	cm, err := clientset.CoreV1().ConfigMaps(namespace).Get(ctx, configMapName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if settingValue, ok := os.LookupEnv(settingName); ok {
+				logger.Infof("%s=%q (env var)", settingName, settingValue)
+				return settingValue, nil
+			}
+			logger.Infof("%s=%q (default)", settingName, defaultValue)
+			return defaultValue, nil
+		}
+		return defaultValue, fmt.Errorf("error reading ConfigMap %q. %v", configMapName, err)
+	}
+	if settingValue, ok := cm.Data[settingName]; ok {
+		logger.Infof("%s=%q (configmap)", settingName, settingValue)
+		return settingValue, nil
+	} else if settingValue, ok := os.LookupEnv(settingName); ok {
+		logger.Infof("%s=%q (env var)", settingName, settingValue)
+		return settingValue, nil
+	}
+	logger.Infof("%s=%q (default)", settingName, defaultValue)
+	return defaultValue, nil
 }

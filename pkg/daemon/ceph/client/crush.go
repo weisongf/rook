@@ -13,19 +13,26 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
 package client
 
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
+	"io/ioutil"
 	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
+	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 )
 
+const (
+	CrushRootConfigKey = "crushRoot"
+)
+
+// CrushMap is the go representation of a CRUSH map
 type CrushMap struct {
 	Devices []struct {
 		ID    int    `json:"id"`
@@ -50,26 +57,31 @@ type CrushMap struct {
 			Pos    int `json:"pos"`
 		} `json:"items"`
 	} `json:"buckets"`
-	Rules []struct {
-		ID      int    `json:"rule_id"`
-		Name    string `json:"rule_name"`
-		Ruleset int    `json:"ruleset"`
-		Type    int    `json:"type"`
-		MinSize int    `json:"min_size"`
-		MaxSize int    `json:"max_size"`
-		Steps   []struct {
-			Operation string `json:"op"`
-			Number    int    `json:"num"`
-			Item      int    `json:"item"`
-			ItemName  string `json:"item_name"`
-			Type      string `json:"type"`
-		} `json:"steps"`
-	} `json:"rules"`
+	Rules    []ruleSpec `json:"rules"`
 	Tunables struct {
 		// Add if necessary
 	} `json:"tunables"`
 }
 
+type ruleSpec struct {
+	ID      int        `json:"rule_id"`
+	Name    string     `json:"rule_name"`
+	Ruleset int        `json:"ruleset"`
+	Type    int        `json:"type"`
+	MinSize int        `json:"min_size"`
+	MaxSize int        `json:"max_size"`
+	Steps   []stepSpec `json:"steps"`
+}
+
+type stepSpec struct {
+	Operation string `json:"op"`
+	Number    uint   `json:"num"`
+	Item      int    `json:"item"`
+	ItemName  string `json:"item_name"`
+	Type      string `json:"type"`
+}
+
+// CrushFindResult is go representation of the Ceph osd find command output
 type CrushFindResult struct {
 	ID       int               `json:"osd"`
 	IP       string            `json:"ip"`
@@ -77,42 +89,46 @@ type CrushFindResult struct {
 	Location map[string]string `json:"crush_location"`
 }
 
-func GetCrushMap(context *clusterd.Context, clusterName string) (CrushMap, error) {
+// GetCrushMap fetches the Ceph CRUSH map
+func GetCrushMap(context *clusterd.Context, clusterInfo *ClusterInfo) (CrushMap, error) {
 	var c CrushMap
 	args := []string{"osd", "crush", "dump"}
-	buf, err := NewCephCommand(context, clusterName, args).Run()
+	buf, err := NewCephCommand(context, clusterInfo, args).Run()
 	if err != nil {
-		return c, errors.Wrapf(err, "failed to get crush map")
+		return c, errors.Wrapf(err, "failed to get crush map. %s", string(buf))
 	}
 
 	err = json.Unmarshal(buf, &c)
 	if err != nil {
-		return c, errors.Wrapf(err, "failed to unmarshal crush map")
+		return c, errors.Wrap(err, "failed to unmarshal crush map")
 	}
 
 	return c, nil
 }
 
-func CrushReweight(context *clusterd.Context, clusterName string, id int, weight float64) (string, error) {
-	args := []string{"osd", "crush", "reweight", fmt.Sprintf("osd.%d", id), fmt.Sprintf("%.1f", weight)}
-	buf, err := NewCephCommand(context, clusterName, args).Run()
-
-	return string(buf), err
-}
-
-func CrushRemove(context *clusterd.Context, clusterName, name string) (string, error) {
-	args := []string{"osd", "crush", "rm", name}
-	buf, err := NewCephCommand(context, clusterName, args).Run()
+// GetCompiledCrushMap fetches the Ceph compiled version of the CRUSH map
+func GetCompiledCrushMap(context *clusterd.Context, clusterInfo *ClusterInfo) (string, error) {
+	compiledCrushMapFile, err := ioutil.TempFile("", "")
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to crush rm. %s", string(buf))
+		return "", errors.Wrap(err, "failed to generate temporarily file")
 	}
 
-	return string(buf), nil
+	args := []string{"osd", "getcrushmap", "--out-file", compiledCrushMapFile.Name()}
+	exec := NewCephCommand(context, clusterInfo, args)
+	exec.OutputFile = false
+	exec.JsonOutput = false
+	buf, err := exec.Run()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to get compiled crush map. %s", string(buf))
+	}
+
+	return compiledCrushMapFile.Name(), nil
 }
 
-func FindOSDInCrushMap(context *clusterd.Context, clusterName string, osdID int) (*CrushFindResult, error) {
+// FindOSDInCrushMap finds an OSD in the CRUSH map
+func FindOSDInCrushMap(context *clusterd.Context, clusterInfo *ClusterInfo, osdID int) (*CrushFindResult, error) {
 	args := []string{"osd", "find", strconv.Itoa(osdID)}
-	buf, err := NewCephCommand(context, clusterName, args).Run()
+	buf, err := NewCephCommand(context, clusterInfo, args).Run()
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to find osd.%d in crush map: %s", osdID, string(buf))
 	}
@@ -125,8 +141,9 @@ func FindOSDInCrushMap(context *clusterd.Context, clusterName string, osdID int)
 	return &result, nil
 }
 
-func GetCrushHostName(context *clusterd.Context, clusterName string, osdID int) (string, error) {
-	result, err := FindOSDInCrushMap(context, clusterName, osdID)
+// GetCrushHostName gets the hostname where an OSD is running on
+func GetCrushHostName(context *clusterd.Context, clusterInfo *ClusterInfo, osdID int) (string, error) {
+	result, err := FindOSDInCrushMap(context, clusterInfo, osdID)
 	if err != nil {
 		return "", err
 	}
@@ -137,6 +154,17 @@ func GetCrushHostName(context *clusterd.Context, clusterName string, osdID int) 
 // NormalizeCrushName replaces . with -
 func NormalizeCrushName(name string) string {
 	return strings.Replace(name, ".", "-", -1)
+}
+
+// Obtain the cluster-wide default crush root from the cluster spec
+func GetCrushRootFromSpec(c *cephv1.ClusterSpec) string {
+	if c.Storage.Config == nil {
+		return cephv1.DefaultCRUSHRoot
+	}
+	if v, ok := c.Storage.Config[CrushRootConfigKey]; ok {
+		return v
+	}
+	return cephv1.DefaultCRUSHRoot
 }
 
 // IsNormalizedCrushNameEqual returns true if normalized is either equal to or the normalized version of notNormalized
@@ -165,22 +193,73 @@ func UpdateCrushMapValue(pairs *[]string, key, value string) {
 	}
 }
 
-func isValidCrushFieldFormat(pair string) bool {
-	matched, err := regexp.MatchString("^.+=.+$", pair)
-	return matched && err == nil
-}
-
-func isCrushFieldSet(fieldName string, pairs []string) bool {
-	for _, p := range pairs {
-		kv := strings.Split(p, "=")
-		if len(kv) == 2 && kv[0] == fieldName && kv[1] != "" {
-			return true
-		}
-	}
-
-	return false
-}
-
 func formatProperty(name, value string) string {
 	return fmt.Sprintf("%s=%s", name, value)
+}
+
+// GetOSDOnHost returns the list of osds running on a given host
+func GetOSDOnHost(context *clusterd.Context, clusterInfo *ClusterInfo, node string) (string, error) {
+	args := []string{"osd", "crush", "ls", node}
+	buf, err := NewCephCommand(context, clusterInfo, args).Run()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to get osd list on host. %s", string(buf))
+	}
+
+	return string(buf), nil
+}
+
+func compileCRUSHMap(context *clusterd.Context, crushMapPath string) error {
+	mapFile := buildCompileCRUSHFileName(crushMapPath)
+	args := []string{"--compile", crushMapPath, "--outfn", mapFile}
+	output, err := context.Executor.ExecuteCommandWithOutput("crushtool", args...)
+	if err != nil {
+		return errors.Wrapf(err, "failed to compile crush map %q. %s", mapFile, output)
+	}
+
+	return nil
+}
+
+func decompileCRUSHMap(context *clusterd.Context, crushMapPath string) error {
+	mapFile := buildDecompileCRUSHFileName(crushMapPath)
+	args := []string{"--decompile", crushMapPath, "--outfn", mapFile}
+	output, err := context.Executor.ExecuteCommandWithOutput("crushtool", args...)
+	if err != nil {
+		return errors.Wrapf(err, "failed to decompile crush map %q. %s", mapFile, output)
+	}
+
+	return nil
+}
+
+func injectCRUSHMap(context *clusterd.Context, clusterInfo *ClusterInfo, crushMapPath string) error {
+	args := []string{"osd", "setcrushmap", "--in-file", crushMapPath}
+	exec := NewCephCommand(context, clusterInfo, args)
+	exec.OutputFile = false
+	exec.JsonOutput = false
+	buf, err := exec.Run()
+	if err != nil {
+		return errors.Wrapf(err, "failed to inject crush map %q. %s", crushMapPath, string(buf))
+	}
+
+	return nil
+}
+
+func setCRUSHMap(context *clusterd.Context, clusterInfo *ClusterInfo, crushMapPath string) error {
+	args := []string{"osd", "crush", "set", crushMapPath}
+	exec := NewCephCommand(context, clusterInfo, args)
+	exec.OutputFile = false
+	exec.JsonOutput = false
+	buf, err := exec.Run()
+	if err != nil {
+		return errors.Wrapf(err, "failed to set crush map %q. %s", crushMapPath, string(buf))
+	}
+
+	return nil
+}
+
+func buildDecompileCRUSHFileName(crushMapPath string) string {
+	return fmt.Sprintf("%s.decompiled", crushMapPath)
+}
+
+func buildCompileCRUSHFileName(crushMapPath string) string {
+	return fmt.Sprintf("%s.compiled", crushMapPath)
 }

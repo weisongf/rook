@@ -20,12 +20,12 @@ Portions of this file came from https://github.com/cockroachdb/cockroach, which 
 package cluster
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"time"
 
 	"github.com/coreos/pkg/capnslog"
-	opkit "github.com/rook/operator-kit"
 	edgefsv1 "github.com/rook/rook/pkg/apis/edgefs.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/edgefs/iscsi"
@@ -33,8 +33,9 @@ import (
 	"github.com/rook/rook/pkg/operator/edgefs/nfs"
 	"github.com/rook/rook/pkg/operator/edgefs/s3"
 	"github.com/rook/rook/pkg/operator/edgefs/s3x"
+	"github.com/rook/rook/pkg/operator/edgefs/smb"
 	"github.com/rook/rook/pkg/operator/edgefs/swift"
-	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
+	"github.com/rook/rook/pkg/operator/k8sutil"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -49,22 +50,19 @@ var (
 const (
 	CustomResourceName         = "cluster"
 	CustomResourceNamePlural   = "clusters"
-	appName                    = "rook-edgefs"
 	clusterCreateInterval      = 6 * time.Second
 	clusterCreateTimeout       = 5 * time.Minute
 	updateClusterInterval      = 30 * time.Second
 	updateClusterTimeout       = 1 * time.Hour
 	clusterDeleteRetryInterval = 2 //seconds
-	clusterDeleteMaxRetries    = 15
 	defaultEdgefsImageName     = "edgefs/edgefs:latest"
 )
 
-var ClusterResource = opkit.CustomResource{
+var ClusterResource = k8sutil.CustomResource{
 	Name:    CustomResourceName,
 	Plural:  CustomResourceNamePlural,
 	Group:   edgefsv1.CustomResourceGroup,
 	Version: edgefsv1.Version,
-	Scope:   apiextensionsv1beta1.NamespaceScoped,
 	Kind:    reflect.TypeOf(edgefsv1.Cluster{}).Name(),
 }
 
@@ -94,7 +92,7 @@ func ClusterOwnerRef(clusterName, clusterID string) metav1.OwnerReference {
 	}
 }
 
-func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) error {
+func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) {
 
 	resourceHandlerFuncs := cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.onAdd,
@@ -103,10 +101,7 @@ func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) e
 	}
 
 	logger.Infof("start watching edgefs clusters in all namespaces")
-	watcher := opkit.NewWatcher(ClusterResource, namespace, resourceHandlerFuncs, c.context.RookClientset.EdgefsV1().RESTClient())
-	go watcher.Watch(&edgefsv1.Cluster{}, stopCh)
-
-	return nil
+	go k8sutil.WatchCR(ClusterResource, namespace, resourceHandlerFuncs, c.context.RookClientset.EdgefsV1().RESTClient(), &edgefsv1.Cluster{}, stopCh)
 }
 
 func (c *ClusterController) StopWatch() {
@@ -117,7 +112,11 @@ func (c *ClusterController) StopWatch() {
 }
 
 func (c *ClusterController) onAdd(obj interface{}) {
-	clusterObj := obj.(*edgefsv1.Cluster).DeepCopy()
+	clusterObj, ok := obj.(*edgefsv1.Cluster)
+	if !ok {
+		return
+	}
+	clusterObj = clusterObj.DeepCopy()
 	logger.Infof("new cluster %s added to namespace %s", clusterObj.Name, clusterObj.Namespace)
 
 	cluster := newCluster(clusterObj, c.context)
@@ -174,6 +173,19 @@ func (c *ClusterController) onAdd(obj interface{}) {
 		cluster.ownerRef,
 		cluster.Spec.UseHostLocalTime)
 	NFSController.StartWatch(cluster.stopCh)
+
+	// Start SMB service CRD watcher
+	SMBController := smb.NewSMBController(c.context,
+		cluster.Namespace,
+		c.containerImage,
+		cluster.Spec.Network,
+		cluster.Spec.DataDirHostPath, cluster.Spec.DataVolumeSize,
+		edgefsv1.GetTargetPlacement(cluster.Spec.Placement),
+		cluster.Spec.Resources,
+		cluster.Spec.ResourceProfile,
+		cluster.ownerRef,
+		cluster.Spec.UseHostLocalTime)
+	SMBController.StartWatch(cluster.stopCh)
 
 	// Start S3 service CRD watcher
 	S3Controller := s3.NewS3Controller(c.context,
@@ -241,20 +253,30 @@ func (c *ClusterController) onAdd(obj interface{}) {
 	ISGWController.StartWatch(cluster.stopCh)
 
 	cluster.childControllers = []childController{
-		NFSController, S3Controller, S3XController, SWIFTController, ISCSIController, ISGWController,
+		NFSController, SMBController, S3Controller, S3XController, SWIFTController, ISCSIController, ISGWController,
 	}
 
 	// add the finalizer to the crd
 	err = c.addFinalizer(clusterObj)
 	if err != nil {
-		logger.Errorf("failed to add finalizer to cluster crd. %+v", err)
+		logger.Errorf("failed to add finalizer to cluster crd. %v", err)
 	}
 }
 
 func (c *ClusterController) onUpdate(oldObj, newObj interface{}) {
-	oldCluster := oldObj.(*edgefsv1.Cluster).DeepCopy()
-	newCluster := newObj.(*edgefsv1.Cluster).DeepCopy()
-	logger.Infof("update event for cluster %s", newCluster.Namespace)
+	oldCluster, ok := oldObj.(*edgefsv1.Cluster)
+	if !ok {
+		return
+	}
+	oldCluster = oldCluster.DeepCopy()
+
+	newCluster, ok := newObj.(*edgefsv1.Cluster)
+	if !ok {
+		return
+	}
+	newCluster = newCluster.DeepCopy()
+
+	logger.Infof("update event for cluster %q", newCluster.Namespace)
 
 	// Check if the cluster is being deleted. This code path is called when a finalizer is specified in the crd.
 	// When a cluster is requested for deletion, K8s will only set the deletion timestamp if there are any finalizers in the list.
@@ -263,7 +285,7 @@ func (c *ClusterController) onUpdate(oldObj, newObj interface{}) {
 		logger.Infof("cluster %s has a deletion timestamp", newCluster.Namespace)
 		err := c.handleDelete(newCluster, time.Duration(clusterDeleteRetryInterval)*time.Second)
 		if err != nil {
-			logger.Errorf("failed finalizer for cluster. %+v", err)
+			logger.Errorf("failed finalizer for cluster. %v", err)
 			return
 		}
 		// remove the finalizer from the crd, which indicates to k8s that the resource can safely be deleted
@@ -369,8 +391,9 @@ func (c *ClusterController) handleDelete(clust *edgefsv1.Cluster, retryInterval 
 }
 
 func (c *ClusterController) updateClusterStatus(namespace, name string, state edgefsv1.ClusterState, message string) {
+	ctx := context.TODO()
 	// get the most recent cluster CRD object
-	cluster, err := c.context.RookClientset.EdgefsV1().Clusters(namespace).Get(name, metav1.GetOptions{})
+	cluster, err := c.context.RookClientset.EdgefsV1().Clusters(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		logger.Errorf("failed to get cluster from namespace %s prior to updating its status: %+v", namespace, err)
 		return
@@ -378,15 +401,16 @@ func (c *ClusterController) updateClusterStatus(namespace, name string, state ed
 
 	// update the status on the retrieved cluster object
 	cluster.Status = edgefsv1.ClusterStatus{State: state, Message: message}
-	if _, err := c.context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Update(cluster); err != nil {
+	if _, err := c.context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Update(ctx, cluster, metav1.UpdateOptions{}); err != nil {
 		logger.Errorf("failed to update cluster %s status: %+v", cluster.Namespace, err)
 	}
 }
 
 func (c *ClusterController) addFinalizer(clust *edgefsv1.Cluster) error {
+	ctx := context.TODO()
 
 	// get the latest cluster object since we probably updated it before we got to this point (e.g. by updating its status)
-	clust, err := c.context.RookClientset.EdgefsV1().Clusters(clust.Namespace).Get(clust.Name, metav1.GetOptions{})
+	clust, err := c.context.RookClientset.EdgefsV1().Clusters(clust.Namespace).Get(ctx, clust.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -403,7 +427,7 @@ func (c *ClusterController) addFinalizer(clust *edgefsv1.Cluster) error {
 	clust.Finalizers = append(clust.Finalizers, finalizerName)
 
 	// update the crd
-	_, err = c.context.RookClientset.EdgefsV1().Clusters(clust.Namespace).Update(clust)
+	_, err = c.context.RookClientset.EdgefsV1().Clusters(clust.Namespace).Update(ctx, clust, metav1.UpdateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to add finalizer to cluster. %+v", err)
 	}
@@ -413,6 +437,7 @@ func (c *ClusterController) addFinalizer(clust *edgefsv1.Cluster) error {
 }
 
 func (c *ClusterController) removeFinalizer(obj interface{}) {
+	ctx := context.TODO()
 	var fname string
 	var objectMeta *metav1.ObjectMeta
 
@@ -443,12 +468,16 @@ func (c *ClusterController) removeFinalizer(obj interface{}) {
 	maxRetries := 5
 	retrySeconds := 5 * time.Second
 	for i := 0; i < maxRetries; i++ {
-		var err error
+		var (
+			okCheck bool
+			err     error
+		)
 		if cluster, ok := obj.(*edgefsv1.Cluster); ok {
-			_, err = c.context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Update(cluster)
+			_, err = c.context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Update(ctx, cluster, metav1.UpdateOptions{})
+			okCheck = true
 		}
 
-		if err != nil {
+		if !okCheck || err != nil {
 			logger.Errorf("failed to remove finalizer %s from cluster %s. %+v", fname, objectMeta.Name, err)
 			time.Sleep(retrySeconds)
 			continue

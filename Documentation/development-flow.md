@@ -10,7 +10,7 @@ don't hesitate to reach out to us on our [Slack](https://Rook-io.slack.com) dev 
 
 ## Prerequisites
 
-1. [GO 1.11](https://golang.org/dl/) or greater installed
+1. [GO 1.13](https://golang.org/dl/) or greater installed
 2. Git client installed
 3. Github account
 
@@ -43,12 +43,14 @@ cd rook
 make
 
 # build a single storage provider, where the IMAGES can be a subdirectory of the "images" folder:
-# "cassandra", "ceph", "cockroachdb", "edgefs", "minio", or "nfs"
+# "cassandra", "ceph", "cockroachdb", "edgefs", or "nfs"
 make IMAGES="cassandra" build
 
 # multiple storage providers can also be built
 make IMAGES="cassandra ceph" build
 ```
+
+If you want to use `podman` instead of `docker` then uninstall `docker` packages from your machine, make will automatically pick up `podman`.
 
 ### Development Settings
 
@@ -119,8 +121,6 @@ rook
 │   │   │   ├── v1
 │   │   ├── cockroachdb.rook.io   # cockroachdb specific specs
 │   │   │   └── v1alpha1
-│   │   ├── minio.rook.io         # minio specific specs for cluster, object
-│   │   │   └── v1alpha1
 │   │   ├── nfs.rook.io           # nfs server specific specs
 │   │   │   └── v1alpha1
 │   │   └── rook.io               # rook.io API group of common types
@@ -135,7 +135,6 @@ rook
 │   │   ├── cockroachdb
 │   │   ├── discover
 │   │   ├── k8sutil
-│   │   ├── minio
 │   │   ├── nfs
 │   │   └── test
 │   ├── test
@@ -160,6 +159,12 @@ To add a feature or to make a bug fix, you will need to create a branch in your 
 ### Design Document
 
 For new features of significant scope and complexity, a design document is recommended before work begins on the implementation.
+So create a design document if:
+
+* Adding a new storage provider
+* Adding a new CRD
+* Adding a significant feature to an existing storage provider. If the design is simple enough to describe in a github issue, you likely don't need a full design doc.
+
 For smaller, straightforward features and bug fixes, there is no need for a design document.
 Authoring a design document for big features has many advantages:
 
@@ -170,6 +175,7 @@ Authoring a design document for big features has many advantages:
 Note that writing code to prototype the feature while working on the design may be very useful to help flesh out the approach.
 
 A design document should be written as a markdown file in the [design folder](/design).
+You can follow the process outlined in the [design template](/design/design_template.md).
 You will see many examples of previous design documents in that folder.
 Submit a pull request for the design to be discussed and approved by the community before being merged into master, just like any other change to the repository.
 
@@ -239,8 +245,53 @@ go tool cover -html=coverage.out -o coverage.html
 ```
 
 #### Running the Integration Tests
+
 For instructions on how to execute the end to end smoke test suite,
 follow the [test instructions](https://github.com/rook/rook/blob/master/tests/README.md).
+
+### Commit structure
+
+Rook maintainers value clear, lengthy and explanatory commit messages. So by default each of your commits must:
+
+* be prefixed by the component it's affecting, if Ceph, then the title of the commit message should be `ceph: my commit title`. If not the commit-lint bot will complain.
+* contain a commit message which explains the original issue and how it was fixed if a bug.
+If a feature it is a full description of the new functionality.
+* refer to the issue it's closing, this is mandatory when fixing a bug
+* have a sign-off, this is achieved by adding `-s` when committing so in practice run `git commit -s`. If not the DCO bot will complain.
+If you forgot to add the sign-off you can also amend a previous commit with the sign-off by running `git commit --amend -s`.
+If you've pushed your changes to Github already you'll need to force push your branch with `git push -f`.
+
+Here is an example of an acceptable commit message:
+
+```text
+component: commit title
+
+This is the commit message, here I'm explaining, what the bug was along with its root cause.
+Then I'm explaining how I fixed it.
+
+Closes: https://github.com/rook/rook/issues/<NUMBER>
+Signed-off-by: First Name Last Name <email address>
+```
+
+The `component` **MUST** be one of the following:
+- bot
+- build
+- cassandra
+- ceph
+- ci
+- cockroachdb
+- core
+- docs
+- edgefs
+- nfs
+- test
+- yugabytedb
+
+Note: sometimes you will feel like there is not so much to say, for instance if you are fixing a typo in a text.
+In that case, it is acceptable to shorten the commit message.
+Also, you don't always need to close an issue, again for a very small fix.
+
+You can read more about [conventional commits](https://www.conventionalcommits.org/en/v1.0.0-beta.2/).
 
 ### Commit History
 
@@ -265,6 +316,9 @@ Go to the [Rook github](https://www.github.com/rook/rook) to open the PR. If you
 
 After the PR is open, you can make changes simply by pushing new commits. Your PR will track the changes in your fork and update automatically.
 
+**Never** open a pull request against a released branch (e.g. release-1.2) unless the content you are editing is gone from master and only exists in the released branch.
+By default, you should always open a pull request against master.
+
 ### Backport a Fix to a Release Branch
 
 The flow for getting a fix into a release branch is:
@@ -285,36 +339,3 @@ In order to support this external operator mode, rook detects if the operator is
 
 * Connecting to Kubernetes API will load the config from the user `~/.kube/config`.
 * Instead of the default [CommandExecutor](../pkg/util/exec/exec.go) this mode uses a [TranslateCommandExecutor](../pkg/util/exec/translate_exec.go) that executes every command issued by the operator to run as a Kubernetes job inside the cluster, so that any tools that the operator needs from its image can be called. For example, in cockroachdb
-
-### Building locally
-
-Building a single rook binary for all operators:
-
-```console
-make GO_STATIC_PACKAGES=github.com/rook/rook/cmd/rook go.build
-```
-
-Note: the binary output location is `_output/bin/linux_amd64/rook` on linux, and `_output/bin/darwin_amd64/rook` on mac.
-
-### Running locally
-
-The command-line flag: `--operator-image <image>` should be used to allow running outside of a pod since some operators read the image from the pod. This is a pattern where the operator pod is based on the image of the actual storage provider image (currently used by ceph, edgefs, cockroachdb, minio). The image url should be passed manually (for now) to match the operator's Dockerfile `FROM` statement.
-
-The next sections describe the supported operators and their notes.
-
-### CockroachDB
-
-```console
-_output/bin/darwin_amd64/rook cockroachdb operator --operator-image cockroachdb/cockroach:v2.0.2
-```
-
-* Set `--operator-image` to the base image of [cockroachdb Dockerfile](../images/cockroachdb/Dockerfile#L15)
-* The execution of `/cockroach/cockroach init` in [initCluster()](../pkg/operator/cockroachdb/controller.go#L490) runs in a kubernetes job to complete the clusterization of its pods.
-
-### Minio
-
-```console
-_output/bin/darwin_amd64/rook minio operator --operator-image minio/minio:RELEASE.2019-04-23T23-50-36Z
-```
-
-* Set `--operator-image` to the base image of [minio Dockerfile](../images/minio/Dockerfile#L15)

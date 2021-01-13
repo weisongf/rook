@@ -43,7 +43,7 @@ function copy_images() {
     if [[ "$1" == "" || "$1" == "ceph" ]]; then
       echo "copying ceph images"
       copy_image_to_cluster "${BUILD_REGISTRY}/ceph-amd64" rook/ceph:master
-      copy_image_to_cluster ceph/ceph:v13 ceph/ceph:v13
+      copy_image_to_cluster ceph/ceph:v15 ceph/ceph:v15
     fi
 
     if [[ "$1" == "" || "$1" == "cockroachdb" ]]; then
@@ -54,11 +54,6 @@ function copy_images() {
     if [[ "$1" == "" || "$1" == "cassandra" ]]; then
       echo "copying cassandra image"
       copy_image_to_cluster "${BUILD_REGISTRY}/cassandra-amd64" rook/cassandra:master
-    fi
-
-    if [[ "$1" == "" || "$1" == "minio" ]]; then
-      echo "copying minio image"
-      copy_image_to_cluster "${BUILD_REGISTRY}/minio-amd64" rook/minio:master
     fi
 
     if [[ "$1" == "" || "$1" == "nfs" ]]; then
@@ -98,7 +93,6 @@ case "${1:-}" in
         echo " copying rook image for helm"
         helm_tag="$(cat _output/version)"
         copy_image_to_cluster "${BUILD_REGISTRY}/ceph-amd64" "rook/ceph:${helm_tag}"
-        copy_image_to_cluster "${BUILD_REGISTRY}/minio-amd64" "rook/minio:${helm_tag}"
         ;;
     clean)
         make clean
@@ -109,7 +103,7 @@ case "${1:-}" in
     *)
         echo "usage:" >&2
         echo "  $0 status" >&2
-        echo "  $0 up [ceph | cockroachdb | cassandra | minio | nfs]" >&2
+        echo "  $0 up [ceph | cockroachdb | cassandra | nfs]" >&2
         echo "  $0 update" >&2
         echo "  $0 restart" >&2
         echo "  $0 helm" >&2

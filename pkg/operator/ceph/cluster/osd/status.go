@@ -18,11 +18,11 @@ limitations under the License.
 package osd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/rook/rook/pkg/operator/ceph/config"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	"github.com/rook/rook/pkg/util"
@@ -43,7 +43,6 @@ const (
 	provisioningLabelKey             = "provisioning"
 	nodeLabelKey                     = "node"
 	completeProvisionTimeout         = 20
-	completeProvisionSkipOSDTimeout  = 5
 )
 
 type provisionConfig struct {
@@ -53,7 +52,7 @@ type provisionConfig struct {
 
 func (c *Cluster) newProvisionConfig() *provisionConfig {
 	return &provisionConfig{
-		DataPathMap: config.NewDatalessDaemonDataPathMap(c.Namespace, c.dataDirHostPath),
+		DataPathMap: config.NewDatalessDaemonDataPathMap(c.clusterInfo.Namespace, c.spec.DataDirHostPath),
 	}
 }
 
@@ -62,11 +61,11 @@ func (c *provisionConfig) addError(message string, args ...interface{}) {
 	c.errorMessages = append(c.errorMessages, fmt.Sprintf(message, args...))
 }
 
-func (c *Cluster) updateOSDStatus(node string, status OrchestrationStatus) error {
-	return UpdateNodeStatus(c.kv, node, status)
+func (c *Cluster) updateOSDStatus(node string, status OrchestrationStatus) {
+	UpdateNodeStatus(c.kv, node, status)
 }
 
-func UpdateNodeStatus(kv *k8sutil.ConfigMapKVStore, node string, status OrchestrationStatus) error {
+func UpdateNodeStatus(kv *k8sutil.ConfigMapKVStore, node string, status OrchestrationStatus) {
 	labels := map[string]string{
 		k8sutil.AppAttr:        AppName,
 		orchestrationStatusKey: provisioningLabelKey,
@@ -81,21 +80,15 @@ func UpdateNodeStatus(kv *k8sutil.ConfigMapKVStore, node string, status Orchestr
 		string(s),
 		labels,
 	); err != nil {
-		return errors.Wrapf(err, "failed to set node %s status", node)
+		// log the error, but allow the orchestration to continue even if the status update failed
+		logger.Errorf("failed to set node %q status to %q for osd orchestration. %s", node, status.Status, status.Message)
 	}
-	return nil
 }
 
 func (c *Cluster) handleOrchestrationFailure(config *provisionConfig, nodeName, message string) {
 	config.addError(message)
 	status := OrchestrationStatus{Status: OrchestrationStatusFailed, Message: message}
-	if err := c.updateOSDStatus(nodeName, status); err != nil {
-		config.addError("failed to update status for node %q. %v", nodeName, err)
-	}
-}
-
-func isStatusCompleted(status OrchestrationStatus) bool {
-	return status.Status == OrchestrationStatusCompleted || status.Status == OrchestrationStatusFailed
+	UpdateNodeStatus(c.kv, nodeName, status)
 }
 
 func parseOrchestrationStatus(data map[string]string) *OrchestrationStatus {
@@ -122,18 +115,15 @@ func (c *Cluster) completeProvision(config *provisionConfig) bool {
 	return c.completeOSDsForAllNodes(config, true, completeProvisionTimeout)
 }
 
-func (c *Cluster) completeProvisionSkipOSDStart(config *provisionConfig) bool {
-	return c.completeOSDsForAllNodes(config, false, completeProvisionSkipOSDTimeout)
-}
-
 func (c *Cluster) checkNodesCompleted(selector string, config *provisionConfig, configOSDs bool) (int, *util.Set, bool, *v1.ConfigMapList, error) {
+	ctx := context.TODO()
 	opts := metav1.ListOptions{
 		LabelSelector: selector,
 		Watch:         false,
 	}
 	remainingNodes := util.NewSet()
 	// check the status map to see if the node is already completed before we start watching
-	statuses, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).List(opts)
+	statuses, err := c.context.Clientset.CoreV1().ConfigMaps(c.clusterInfo.Namespace).List(ctx, opts)
 	if err != nil {
 		if !kerrors.IsNotFound(err) {
 			config.addError("failed to get config status. %v", err)
@@ -150,8 +140,8 @@ func (c *Cluster) checkNodesCompleted(selector string, config *provisionConfig, 
 			logger.Warningf("missing node label on configmap %s", configMap.Name)
 			continue
 		}
-
-		completed := c.handleStatusConfigMapStatus(node, config, &configMap, configOSDs)
+		localconfigMap := configMap
+		completed := c.handleStatusConfigMapStatus(node, config, &localconfigMap, configOSDs)
 		if !completed {
 			remainingNodes.Add(node)
 		}
@@ -163,6 +153,7 @@ func (c *Cluster) checkNodesCompleted(selector string, config *provisionConfig, 
 }
 
 func (c *Cluster) completeOSDsForAllNodes(config *provisionConfig, configOSDs bool, timeoutMinutes int) bool {
+	ctx := context.TODO()
 	selector := fmt.Sprintf("%s=%s,%s=%s",
 		k8sutil.AppAttr, AppName,
 		orchestrationStatusKey, provisioningLabelKey,
@@ -183,7 +174,7 @@ func (c *Cluster) completeOSDsForAllNodes(config *provisionConfig, configOSDs bo
 		}
 		logger.Infof("%d/%d node(s) completed osd provisioning, resource version %v", (originalNodes - remainingNodes.Count()), originalNodes, opts.ResourceVersion)
 
-		w, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Watch(opts)
+		w, err := c.context.Clientset.CoreV1().ConfigMaps(c.clusterInfo.Namespace).Watch(ctx, opts)
 		if err != nil {
 			logger.Warningf("failed to start watch on osd status, trying again. %v", err)
 			time.Sleep(5 * time.Second)
@@ -199,9 +190,7 @@ func (c *Cluster) completeOSDsForAllNodes(config *provisionConfig, configOSDs bo
 					logger.Infof("orchestration status config map result channel closed, will restart watch.")
 					w.Stop()
 					<-time.After(5 * time.Second)
-					leftNodes := 0
-					leftRemainingNodes := util.NewSet()
-					leftNodes, leftRemainingNodes, completed, statuses, err = c.checkNodesCompleted(selector, config, configOSDs)
+					leftNodes, leftRemainingNodes, completed, _, err := c.checkNodesCompleted(selector, config, configOSDs)
 					if err == nil {
 						if completed {
 							logger.Infof("additional %d/%d node(s) completed osd provisioning", leftNodes, originalNodes)
@@ -214,7 +203,11 @@ func (c *Cluster) completeOSDsForAllNodes(config *provisionConfig, configOSDs bo
 					break ResultLoop
 				}
 				if e.Type == watch.Modified {
-					configMap := e.Object.(*v1.ConfigMap)
+					configMap, ok := e.Object.(*v1.ConfigMap)
+					if !ok {
+						logger.Errorf("expected type ConfigMap but found %T", configMap)
+						continue
+					}
 					node, ok := configMap.Labels[nodeLabelKey]
 					if !ok {
 						logger.Infof("missing node label on configmap %s", configMap.Name)
@@ -270,7 +263,9 @@ func (c *Cluster) handleStatusConfigMapStatus(nodeName string, config *provision
 				c.startOSDDaemonsOnNode(nodeName, config, configMap, status)
 			}
 			// remove the status configmap that indicated the progress
-			c.kv.ClearStore(fmt.Sprintf(orchestrationStatusMapName, nodeName))
+			if err := c.kv.ClearStore(k8sutil.TruncateNodeName(orchestrationStatusMapName, nodeName)); err != nil {
+				logger.Errorf("failed to remove the status configmap. %v", err)
+			}
 		}
 
 		return true

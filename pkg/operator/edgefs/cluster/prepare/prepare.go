@@ -22,11 +22,11 @@ import (
 	"fmt"
 
 	"github.com/coreos/pkg/capnslog"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	batch "k8s.io/api/batch/v1"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -45,20 +45,19 @@ type Cluster struct {
 	Namespace      string
 	Version        string
 	serviceAccount string
-	annotations    rookalpha.Annotations
-	placement      rookalpha.Placement
+	annotations    rookv1.Annotations
+	placement      rookv1.Placement
 	context        *clusterd.Context
 	resources      v1.ResourceRequirements
 	ownerRef       metav1.OwnerReference
-	ctx            context.Context
 }
 
 // New creates an instance of the prepare
 func New(
 	context *clusterd.Context, namespace, version string,
 	serviceAccount string,
-	annotations rookalpha.Annotations,
-	placement rookalpha.Placement,
+	annotations rookv1.Annotations,
+	placement rookv1.Placement,
 	resources v1.ResourceRequirements,
 	ownerRef metav1.OwnerReference,
 ) *Cluster {
@@ -83,11 +82,12 @@ func New(
 
 // Start the prepare instance
 func (c *Cluster) Start(rookImage string, nodeName string) error {
+	ctx := context.TODO()
 	logger.Infof("start running prepare pods")
 
 	// start the deployment
 	job := c.makeJob(appName, c.Namespace, rookImage, nodeName)
-	if _, err := c.context.Clientset.BatchV1().Jobs(c.Namespace).Create(job); err != nil {
+	if _, err := c.context.Clientset.BatchV1().Jobs(c.Namespace).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create %s job. %+v", appName, err)
 		}
@@ -96,12 +96,12 @@ func (c *Cluster) Start(rookImage string, nodeName string) error {
 		logger.Infof("%s job started", appName)
 	}
 
-	err := c.waitJob(job)
+	err := c.waitJob(ctx, job)
 	if err != nil {
 		logger.Warningf("Job %s waiting failed. %+v", job.ObjectMeta.Name, err)
 	}
 
-	err = c.deleteJob(job)
+	err = c.deleteJob(ctx, job)
 	if err != nil {
 		logger.Warningf("Failed to delete job %s due. %+v", job.ObjectMeta.Name, err)
 	}
@@ -154,12 +154,15 @@ func (c *Cluster) makeJob(name, clusterName, rookImage string, nodeName string) 
 	return ds
 }
 
-func (c *Cluster) waitJob(job *batch.Job) error {
+func (c *Cluster) waitJob(ctx context.Context, job *batch.Job) error {
 	batchClient := c.context.Clientset.BatchV1()
 	jobsClient := batchClient.Jobs(job.ObjectMeta.Namespace)
-	watch, err := jobsClient.Watch(metav1.ListOptions{LabelSelector: "job-name=" + job.ObjectMeta.Name})
+	watch, err := jobsClient.Watch(ctx, metav1.ListOptions{LabelSelector: "job-name=" + job.ObjectMeta.Name})
+	if err != nil {
+		return fmt.Errorf("Failed to watch job %s", job.ObjectMeta.Name)
+	}
 
-	k8sjob, err := jobsClient.Get(job.ObjectMeta.Name, metav1.GetOptions{})
+	k8sjob, err := jobsClient.Get(ctx, job.ObjectMeta.Name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("Failed to get job %s", job.ObjectMeta.Name)
 	}
@@ -170,34 +173,32 @@ func (c *Cluster) waitJob(job *batch.Job) error {
 
 	events := watch.ResultChan()
 	for {
-		select {
-		case event := <-events:
-			if event.Object == nil {
-				return fmt.Errorf("Result channel closed for Job %s", job.ObjectMeta.Name)
-			}
-			k8sJob, ok := event.Object.(*batch.Job)
-			if !ok {
-				return fmt.Errorf("Invalid Job event object: %T", event.Object)
-			}
-			conditions := k8sJob.Status.Conditions
-			for _, condition := range conditions {
-				if condition.Type == batch.JobComplete {
-					logger.Infof("Job %s reported complete", job.ObjectMeta.Name)
-					return nil
-				} else if condition.Type == batch.JobFailed {
-					return fmt.Errorf("Job %s failed", job.ObjectMeta.Name)
-				}
+		event := <-events
+		if event.Object == nil {
+			return fmt.Errorf("Result channel closed for Job %s", job.ObjectMeta.Name)
+		}
+		k8sJob, ok := event.Object.(*batch.Job)
+		if !ok {
+			return fmt.Errorf("Invalid Job event object: %T", event.Object)
+		}
+		conditions := k8sJob.Status.Conditions
+		for _, condition := range conditions {
+			if condition.Type == batch.JobComplete {
+				logger.Infof("Job %s reported complete", job.ObjectMeta.Name)
+				return nil
+			} else if condition.Type == batch.JobFailed {
+				return fmt.Errorf("Job %s failed", job.ObjectMeta.Name)
 			}
 		}
+
 	}
 }
 
-func (c *Cluster) deleteJob(job *batch.Job) error {
+func (c *Cluster) deleteJob(ctx context.Context, job *batch.Job) error {
 	batchClient := c.context.Clientset.BatchV1()
 	jobsClient := batchClient.Jobs(job.ObjectMeta.Namespace)
-	var deletePropagation metav1.DeletionPropagation
-	deletePropagation = metav1.DeletePropagationForeground
-	err := jobsClient.Delete(job.ObjectMeta.Name, &metav1.DeleteOptions{PropagationPolicy: &deletePropagation})
+	deletePropagation := metav1.DeletePropagationForeground
+	err := jobsClient.Delete(ctx, job.ObjectMeta.Name, metav1.DeleteOptions{PropagationPolicy: &deletePropagation})
 	if err != nil {
 		return fmt.Errorf("Failed to delete job %s", job.ObjectMeta.Name)
 	}

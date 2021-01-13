@@ -47,14 +47,14 @@ func FindRBDMappedFile(imageName, poolName, sysBusDir string) (string, error) {
 
 	files, err := ioutil.ReadDir(sysBusDeviceDir)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to read rbd device dir")
+		return "", errors.Wrap(err, "failed to read rbd device dir")
 	}
 
 	for _, idFile := range files {
-		nameContent, err := ioutil.ReadFile(filepath.Join(sysBusDeviceDir, idFile.Name(), "name"))
+		nameContent, err := ioutil.ReadFile(filepath.Clean(filepath.Join(sysBusDeviceDir, idFile.Name(), "name")))
 		if err == nil && imageName == strings.TrimSpace(string(nameContent)) {
 			// the image for the current rbd device matches, now try to match pool
-			poolContent, err := ioutil.ReadFile(filepath.Join(sysBusDeviceDir, idFile.Name(), "pool"))
+			poolContent, err := ioutil.ReadFile(filepath.Clean(filepath.Join(sysBusDeviceDir, idFile.Name(), "pool")))
 			if err == nil && poolName == strings.TrimSpace(string(poolContent)) {
 				// match current device matches both image name and pool name, return the device
 				return idFile.Name(), nil
@@ -80,6 +80,7 @@ func GetPortFromEndpoint(endpoint string) int32 {
 	if err != nil {
 		logger.Errorf("failed to split host and port for endpoint %q, assuming default Ceph port %q. %v", endpoint, portString, err)
 	} else {
+		// #nosec G109 using Atoi to convert type into int is not a real risk
 		port, err = strconv.Atoi(portString)
 		if err != nil {
 			logger.Errorf("failed to convert %q to integer. %v", portString, err)

@@ -18,6 +18,7 @@ package installer
 
 import (
 	"fmt"
+
 	cassandrav1alpha1 "github.com/rook/rook/pkg/apis/cassandra.rook.io/v1alpha1"
 )
 
@@ -127,7 +128,6 @@ kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: rook-cassandra-operator
-  namespace: %[1]s
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -178,7 +178,7 @@ func (i *CassandraManifests) GetCassandraCluster(namespace string, count int, mo
 	if mode == cassandrav1alpha1.ClusterModeScylla {
 		version = "2.3.0"
 	} else {
-		version = "3.11.1"
+		version = "3.11.6"
 	}
 	return fmt.Sprintf(`
 # Namespace for cassandra cluster

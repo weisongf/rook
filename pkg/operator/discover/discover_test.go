@@ -18,10 +18,11 @@ limitations under the License.
 package discover
 
 import (
+	"context"
 	"os"
 	"testing"
 
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	discoverDaemon "github.com/rook/rook/pkg/daemon/discover"
 	"github.com/rook/rook/pkg/operator/k8sutil"
@@ -34,7 +35,8 @@ import (
 )
 
 func TestStartDiscoveryDaemonset(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -63,14 +65,14 @@ func TestStartDiscoveryDaemonset(t *testing.T) {
 			},
 		},
 	}
-	clientset.CoreV1().Pods("rook-system").Create(&pod)
-
+	_, err := clientset.CoreV1().Pods("rook-system").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 	// start a basic cluster
-	err := a.Start(namespace, "rook/rook:myversion", "mysa", false)
+	err = a.Start(namespace, "rook/rook:myversion", "mysa", false)
 	assert.Nil(t, err)
 
 	// check daemonset parameters
-	agentDS, err := clientset.AppsV1().DaemonSets(namespace).Get("rook-discover", metav1.GetOptions{})
+	agentDS, err := clientset.AppsV1().DaemonSets(namespace).Get(ctx, "rook-discover", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.Equal(t, namespace, agentDS.Namespace)
 	assert.Equal(t, "rook-discover", agentDS.Name)
@@ -89,7 +91,8 @@ func TestStartDiscoveryDaemonset(t *testing.T) {
 }
 
 func TestGetAvailableDevices(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 	pvcBackedOSD := false
 	ns := "rook-system"
 	nodeName := "node123"
@@ -112,12 +115,12 @@ func TestGetAvailableDevices(t *testing.T) {
 		},
 		Data: data,
 	}
-	_, err := clientset.CoreV1().ConfigMaps(ns).Create(cm)
+	_, err := clientset.CoreV1().ConfigMaps(ns).Create(ctx, cm, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	context := &clusterd.Context{
 		Clientset: clientset,
 	}
-	d := []rookalpha.Device{
+	d := []rookv1.Device{
 		{
 			Name: "sdc",
 		},

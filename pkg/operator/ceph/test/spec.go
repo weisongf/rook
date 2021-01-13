@@ -22,13 +22,8 @@ import (
 	"testing"
 
 	e "github.com/pkg/errors"
-	"github.com/rook/rook/pkg/operator/ceph/config"
 	optest "github.com/rook/rook/pkg/operator/test"
 	"github.com/stretchr/testify/assert"
-)
-
-const (
-	labelMismatchFormat = "label mismatch: expected={%s: %s} present={%s: %s}"
 )
 
 func checkLabel(key, value string, labels map[string]string) error {
@@ -78,7 +73,7 @@ func VerifyPodLabels(appName, namespace, daemonType, daemonID string, labels map
 // DaemonSets, etc.
 func AssertLabelsContainCephRequirements(
 	t *testing.T, labels map[string]string,
-	daemonType config.DaemonType, daemonID, appName, namespace string,
+	daemonType, daemonID, appName, namespace string,
 ) {
 	optest.AssertLabelsContainRookRequirements(t, labels, appName)
 

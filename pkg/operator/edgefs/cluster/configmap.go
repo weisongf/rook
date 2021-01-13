@@ -17,6 +17,7 @@ limitations under the License.
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 
 	edgefsv1 "github.com/rook/rook/pkg/apis/edgefs.rook.io/v1"
@@ -31,21 +32,21 @@ const (
 	defaultServerIfName            = "eth0"
 	defaultBrokerIfName            = "eth0"
 	defaultTrlogProcessingInterval = 10
-	defaultTrlogKeepDays           = 3
+	defaultTrlogKeepDays           = 3.0
 )
 
 // As we relying on StatefulSet, we want to build global ConfigMap shared
 // to all the nodes in the cluster. This way configuration is simplified and
 // available to all subcomponents at any point it time.
 func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploymentConfig, resurrect bool) error {
-
+	ctx := context.TODO()
+	var err error
 	cm := make(map[string]edgefsv1.SetupNode)
 
 	dnsRecords := make([]string, len(deploymentConfig.DevConfig))
 	for i := 0; i < len(deploymentConfig.DevConfig); i++ {
 		dnsRecords[i] = target.CreateQualifiedHeadlessServiceName(i, c.Namespace)
 	}
-
 	serverIfName := defaultServerIfName
 	brokerIfName := defaultBrokerIfName
 
@@ -65,7 +66,6 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 		}
 	} else if c.Spec.Network.IsMultus() {
 		if serverDefined && brokerDefined {
-			var err error
 			serverIfName, err = k8sutil.GetMultusIfName(serverSelector)
 			if err != nil {
 				return err
@@ -76,14 +76,14 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 				return err
 			}
 		} else if serverDefined {
-			serverIfName, err := k8sutil.GetMultusIfName(serverSelector)
+			serverIfName, err = k8sutil.GetMultusIfName(serverSelector)
 			if err != nil {
 				return err
 			}
 
 			brokerIfName = serverIfName
 		} else if brokerDefined {
-			serverIfName, err := k8sutil.GetMultusIfName(brokerSelector)
+			serverIfName, err = k8sutil.GetMultusIfName(brokerSelector)
 			if err != nil {
 				return err
 			}
@@ -114,7 +114,7 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 			// In resurrection case we only need to adjust networking selections
 			// in ccow.json, ccowd.json and corosync.conf. And keep device transport
 			// same as before. Resurrection is "best effort" feature, we cannot
-			// guarnatee that cluster can be reconfigured, but at least we do try.
+			// guarantee that cluster can be reconfigured, but at least we do try.
 
 			rtDevices = make([]edgefsv1.RTDevice, 0)
 			rtSlaveDevices = make([]edgefsv1.RTDevices, 0)
@@ -134,7 +134,7 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 			case "zone":
 				failureDomain = 2
 			default:
-				logger.Infof("Unknow failure domain %s, skipped", c.Spec.FailureDomain)
+				logger.Infof("Unknown failure domain %s, skipped", c.Spec.FailureDomain)
 			}
 		}
 		commitWait := 1
@@ -162,8 +162,8 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 			},
 			Ccowd: edgefsv1.CcowdConf{
 				BgConfig: edgefsv1.CcowdBgConfig{
-					TrlogDeleteAfterHours:     defaultTrlogKeepDays * 24,
-					SpeculativeBackrefTimeout: defaultTrlogKeepDays * 24 * 3600 * 1000,
+					TrlogDeleteAfterHours:     int(defaultTrlogKeepDays * 24),
+					SpeculativeBackrefTimeout: int(defaultTrlogKeepDays * 24 * 3600 * 1000),
 				},
 				Zone: devConfig.Zone,
 				Network: edgefsv1.CcowdNetwork{
@@ -195,8 +195,8 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 		}
 
 		if c.Spec.TrlogKeepDays > 0 {
-			nodeConfig.Ccowd.BgConfig.TrlogDeleteAfterHours = c.Spec.TrlogKeepDays * 24
-			nodeConfig.Ccowd.BgConfig.SpeculativeBackrefTimeout = c.Spec.TrlogKeepDays * 24 * 3600 * 1000
+			nodeConfig.Ccowd.BgConfig.TrlogDeleteAfterHours = int(c.Spec.TrlogKeepDays * 24)
+			nodeConfig.Ccowd.BgConfig.SpeculativeBackrefTimeout = int(c.Spec.TrlogKeepDays * 24 * 3600 * 1000)
 		}
 
 		if c.Spec.SystemReplicationCount > 0 {
@@ -231,9 +231,9 @@ func (c *cluster) createClusterConfigMap(deploymentConfig edgefsv1.ClusterDeploy
 	}
 
 	k8sutil.SetOwnerRef(&configMap.ObjectMeta, &c.ownerRef)
-	if _, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Create(configMap); err != nil {
+	if _, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Create(ctx, configMap, metav1.CreateOptions{}); err != nil {
 		if errors.IsAlreadyExists(err) {
-			if _, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Update(configMap); err != nil {
+			if _, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Update(ctx, configMap, metav1.UpdateOptions{}); err != nil {
 				return nil
 			}
 		} else {

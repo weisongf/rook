@@ -22,6 +22,8 @@ import (
 	"strings"
 
 	"github.com/coreos/pkg/capnslog"
+	netclient "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned/typed/k8s.cni.cncf.io/v1"
+	"github.com/pkg/errors"
 	rookclient "github.com/rook/rook/pkg/client/clientset/versioned"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
@@ -30,6 +32,7 @@ import (
 	"github.com/rook/rook/pkg/version"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	"github.com/tevino/abool"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/client-go/kubernetes"
@@ -125,8 +128,6 @@ func NewContext() *clusterd.Context {
 		context.Executor = &exec.TranslateCommandExecutor{
 			Executor: context.Executor,
 			Translator: func(
-				debug bool,
-				actionName string,
 				command string,
 				arg ...string,
 			) (string, []string) {
@@ -155,6 +156,11 @@ func NewContext() *clusterd.Context {
 
 	context.RookClientset, err = rookclient.NewForConfig(context.KubeConfig)
 	TerminateOnError(err, "failed to create rook clientset")
+
+	context.NetworkClient, err = netclient.NewForConfig(context.KubeConfig)
+	TerminateOnError(err, "failed to create network clientset")
+
+	context.RequestCancelOrchestration = abool.New()
 
 	return context
 }
@@ -203,15 +209,29 @@ func TerminateOnError(err error, msg string) {
 func TerminateFatal(reason error) {
 	fmt.Fprintln(os.Stderr, reason)
 
-	file, err := os.OpenFile(terminationLog, os.O_APPEND|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(terminationLog, os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, fmt.Errorf("failed to write message to termination log: %+v", err))
 	} else {
+		// #nosec G307 Calling defer to close the file without checking the error return is not a risk for a simple file open and close
 		defer file.Close()
 		if _, err = file.WriteString(reason.Error()); err != nil {
 			fmt.Fprintln(os.Stderr, fmt.Errorf("failed to write message to termination log: %+v", err))
 		}
+		if err := file.Close(); err != nil {
+			logger.Errorf("failed to close file. %v", err)
+		}
 	}
 
 	os.Exit(1)
+}
+
+// GetOperatorBaseImageCephVersion returns the Ceph version of the operator image
+func GetOperatorBaseImageCephVersion(context *clusterd.Context) (string, error) {
+	output, err := context.Executor.ExecuteCommandWithOutput("ceph", "--version")
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to execute command to detect ceph version")
+	}
+
+	return output, nil
 }

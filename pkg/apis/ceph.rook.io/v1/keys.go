@@ -17,13 +17,15 @@ limitations under the License.
 package v1
 
 import (
-	rook "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rook "github.com/rook/rook/pkg/apis/rook.io/v1"
 )
 
 const (
-	KeyMon       rook.KeyType = "mon"
-	KeyMgr       rook.KeyType = "mgr"
-	KeyOSD       rook.KeyType = "osd"
-	KeyRBDMirror rook.KeyType = "rbdmirror"
-	KeyRGWMirror rook.KeyType = "rgw"
+	KeyMds        rook.KeyType = "mds"
+	KeyMon        rook.KeyType = "mon"
+	KeyMonArbiter rook.KeyType = "arbiter"
+	KeyMgr        rook.KeyType = "mgr"
+	KeyOSDPrepare rook.KeyType = "prepareosd"
+	KeyOSD        rook.KeyType = "osd"
+	KeyCleanup    rook.KeyType = "cleanup"
 )

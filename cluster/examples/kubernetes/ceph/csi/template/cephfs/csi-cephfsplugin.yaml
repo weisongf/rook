@@ -14,23 +14,30 @@ spec:
       labels:
         app: csi-cephfsplugin
         contains: csi-cephfsplugin-metrics
+        {{ range $key, $value := .CSICephFSPodLabels }}
+        {{ $key }}: "{{ $value }}"
+        {{ end }}
     spec:
       serviceAccount: rook-csi-cephfs-plugin-sa
       hostNetwork: true
+      {{ if .PluginPriorityClassName }}
+      priorityClassName: {{ .PluginPriorityClassName }}
+      {{ end }}
       # to use e.g. Rook orchestrated cluster, and mons' FQDN is
       # resolved through k8s service, set dns policy to cluster first
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: driver-registrar
+          # This is necessary only for systems with SELinux, where
+          # non-privileged sidecar containers cannot access unix domain socket
+          # created by privileged CSI driver container.
+          securityContext:
+            privileged: true
           image: {{ .RegistrarImage }}
           args:
-            - "--v=5"
+            - "--v={{ .LogLevel }}"
             - "--csi-address=/csi/csi.sock"
             - "--kubelet-registration-path={{ .KubeletDirPath }}/plugins/{{ .DriverNamePrefix }}cephfs.csi.ceph.com/csi.sock"
-          lifecycle:
-            preStop:
-              exec:
-                  command: ["/bin/sh", "-c", "rm -rf /registration/{{ .DriverNamePrefix }}cephfs.csi.ceph.com /registration/{{ .DriverNamePrefix }}cephfs.csi.ceph.com-reg.sock"]
           env:
             - name: KUBE_NODE_NAME
               valueFrom:
@@ -52,11 +59,9 @@ spec:
             - "--nodeid=$(NODE_ID)"
             - "--type=cephfs"
             - "--endpoint=$(CSI_ENDPOINT)"
-            - "--v=5"
+            - "--v={{ .LogLevel }}"
             - "--nodeserver=true"
             - "--drivername={{ .DriverNamePrefix }}cephfs.csi.ceph.com"
-            - "--metadatastorage=k8s_configmap"
-            - "--mountcachedir=/mount-cache-dir"
             - "--pidlimit=-1"
             - "--metricsport={{ .CephFSGRPCMetricsPort }}"
             - "--forcecephkernelclient={{ .ForceCephFSKernelClient }}"
@@ -94,13 +99,15 @@ spec:
               readOnly: true
             - name: host-dev
               mountPath: /dev
-            - name: mount-cache-dir
-              mountPath: /mount-cache-dir
             - name: ceph-csi-config
               mountPath: /etc/ceph-csi-config/
             - name: keys-tmp-dir
               mountPath: /tmp/csi/keys
+            - name: host-run-mount
+              mountPath: /run/mount
         - name: liveness-prometheus
+          securityContext:
+            privileged: true
           image: {{ .CSIPluginImage }}
           args:
             - "--type=liveness"
@@ -146,8 +153,6 @@ spec:
         - name: host-dev
           hostPath:
             path: /dev
-        - name: mount-cache-dir
-          emptyDir: {}
         - name: ceph-csi-config
           configMap:
             name: rook-ceph-csi-config
@@ -158,3 +163,6 @@ spec:
           emptyDir: {
             medium: "Memory"
           }
+        - name: host-run-mount
+          hostPath:
+            path: /run/mount

@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
+	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
 )
@@ -27,31 +28,64 @@ import (
 // Context holds the context for the object store.
 type Context struct {
 	Context     *clusterd.Context
+	clusterInfo *client.ClusterInfo
 	Name        string
-	ClusterName string
+	UID         string
+	Endpoint    string
+	Realm       string
+	ZoneGroup   string
+	Zone        string
 }
 
 // NewContext creates a new object store context.
-func NewContext(context *clusterd.Context, name, clusterName string) *Context {
-	return &Context{Context: context, Name: name, ClusterName: clusterName}
+func NewContext(context *clusterd.Context, clusterInfo *client.ClusterInfo, name string) *Context {
+	return &Context{Context: context, Name: name, clusterInfo: clusterInfo}
 }
 
-func runAdminCommandNoRealm(c *Context, args ...string) (string, error) {
-	command, args := client.FinalizeCephCommandArgs("radosgw-admin", args, c.Context.ConfigDir, c.ClusterName)
+func NewMultisiteContext(context *clusterd.Context, clusterInfo *client.ClusterInfo, store *cephv1.CephObjectStore) (*Context, error) {
+	objContext := &Context{Context: context, Name: store.Name, clusterInfo: clusterInfo}
+	realmName, zoneGroupName, zoneName, err := getMultisiteForObjectStore(context, store)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get realm/zone group/zone for object store %q", store.Name)
+	}
+
+	objContext.Realm = realmName
+	objContext.ZoneGroup = zoneGroupName
+	objContext.Zone = zoneName
+	return objContext, nil
+}
+
+// This function is for running radosgw-admin commands in scenarios where an object-store has not been created yet or for commands on the realm or zonegroup (ex: radosgw-admin zonegroup get)
+func RunAdminCommandNoMultisite(c *Context, args ...string) (string, error) {
+	command, args := client.FinalizeCephCommandArgs("radosgw-admin", c.clusterInfo, args, c.Context.ConfigDir)
 
 	// start the rgw admin command
-	output, err := c.Context.Executor.ExecuteCommandWithOutput(false, "", command, args...)
+	output, err := c.Context.Executor.ExecuteCommandWithOutput(command, args...)
 	if err != nil {
-		return "", errors.Wrapf(err, "failed to run radosgw-admin")
+		return output, err
 	}
 
 	return output, nil
 }
 
+// This function is for running radosgw-admin commands in scenarios where an object-store has been created and the Context has been updated with the appropriate realm, zone group, and zone.
 func runAdminCommand(c *Context, args ...string) (string, error) {
-	options := []string{
-		fmt.Sprintf("--rgw-realm=%s", c.Name),
-		fmt.Sprintf("--rgw-zonegroup=%s", c.Name),
+	// If the objectStoreName is not passed in the storage class
+	// This means we are pointing to an external cluster so these commands are not needed
+	// simply because the external cluster mode does not support that yet
+	//
+	// The following conditions tries to determine if the cluster is external
+	// When connecting to an external cluster, the Ceph user is different than client.admin
+	// This is not perfect though since "client.admin" is somehow supported...
+	if c.Name != "" && c.clusterInfo.CephCred.Username == client.AdminUsername {
+		options := []string{
+			fmt.Sprintf("--rgw-realm=%s", c.Realm),
+			fmt.Sprintf("--rgw-zonegroup=%s", c.ZoneGroup),
+			fmt.Sprintf("--rgw-zone=%s", c.Zone),
+		}
+
+		return RunAdminCommandNoMultisite(c, append(args, options...)...)
 	}
-	return runAdminCommandNoRealm(c, append(args, options...)...)
+
+	return RunAdminCommandNoMultisite(c, args...)
 }

@@ -17,8 +17,11 @@ limitations under the License.
 package k8sutil
 
 import (
+	"context"
 	"fmt"
 	"time"
+
+	"github.com/banzaicloud/k8s-objectmatcher/patch"
 
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/util"
@@ -33,7 +36,8 @@ import (
 
 // GetDeploymentImage returns the version of the image running in the pod spec for the desired container
 func GetDeploymentImage(clientset kubernetes.Interface, namespace, name, container string) (string, error) {
-	d, err := clientset.AppsV1().Deployments(namespace).Get(name, metav1.GetOptions{})
+	ctx := context.TODO()
+	d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to find deployment %s. %v", name, err)
 	}
@@ -58,55 +62,87 @@ func GetDeploymentSpecImage(clientset kubernetes.Interface, d apps.Deployment, c
 //   2. verify that we can continue the update procedure
 // Basically, we go one resource by one and check if we can stop and then if the resource has been successfully updated
 // we check if we can go ahead and move to the next one.
-func UpdateDeploymentAndWait(context *clusterd.Context, deployment *apps.Deployment, namespace string, verifyCallback func(action string) error) (*v1.Deployment, error) {
-	original, err := context.Clientset.AppsV1().Deployments(namespace).Get(deployment.Name, metav1.GetOptions{})
+func UpdateDeploymentAndWait(clusterdContext *clusterd.Context, modifiedDeployment *apps.Deployment, namespace string, verifyCallback func(action string) error) (*v1.Deployment, error) {
+	ctx := context.TODO()
+	currentDeployment, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Get(ctx, modifiedDeployment.Name, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get deployment %s. %+v", deployment.Name, err)
+		return nil, fmt.Errorf("failed to get deployment %s. %+v", modifiedDeployment.Name, err)
 	}
 
-	// Let's verify the deployment can be stopped
-	// retry for 5 times, every minute
-	err = util.Retry(5, 60*time.Second, func() error {
-		return verifyCallback("stop")
-	})
+	// Check whether the current deployment and newly generated one are identical
+	patchChanged := false
+	patchResult, err := patch.DefaultPatchMaker.Calculate(currentDeployment, modifiedDeployment)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check if deployment %s can be updated: %+v", deployment.Name, err)
+		logger.Warningf("failed to calculate diff between current deployment %q and newly generated one. Assuming it changed. %v", currentDeployment.Name, err)
+		patchChanged = true
+	} else if !patchResult.IsEmpty() {
+		patchChanged = true
 	}
 
-	logger.Infof("updating deployment %s", deployment.Name)
-	if _, err := context.Clientset.AppsV1().Deployments(namespace).Update(deployment); err != nil {
-		return nil, fmt.Errorf("failed to update deployment %s. %+v", deployment.Name, err)
-	}
+	// If deployments are different, let's update!
+	if patchChanged {
+		logger.Infof("updating deployment %q after verifying it is safe to stop", modifiedDeployment.Name)
 
-	// wait for the deployment to be restarted
-	sleepTime := 2
-	attempts := 30
-	if original.Spec.ProgressDeadlineSeconds != nil {
-		// make the attempts double the progress deadline since the pod is both stopping and starting
-		attempts = 2 * (int(*original.Spec.ProgressDeadlineSeconds) / sleepTime)
-	}
-	for i := 0; i < attempts; i++ {
-		// check for the status of the deployment
-		d, err := context.Clientset.AppsV1().Deployments(namespace).Get(deployment.Name, metav1.GetOptions{})
+		// Let's verify the deployment can be stopped
+		// retry for 5 times, every minute
+		err = util.Retry(5, 60*time.Second, func() error {
+			return verifyCallback("stop")
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to get deployment %s. %+v", deployment.Name, err)
+			return nil, fmt.Errorf("failed to check if deployment %q can be updated. %v", modifiedDeployment.Name, err)
 		}
-		if d.Status.ObservedGeneration != original.Status.ObservedGeneration && d.Status.UpdatedReplicas > 0 && d.Status.ReadyReplicas > 0 {
-			logger.Infof("finished waiting for updated deployment %s", d.Name)
 
-			// Now we check if we can go to the next daemon
-			err = verifyCallback("continue")
+		// Set hash annotation to the newly generated deployment
+		err := patch.DefaultAnnotator.SetLastAppliedAnnotation(modifiedDeployment)
+		if err != nil {
+			return nil, fmt.Errorf("failed to set hash annotation on deployment %q. %v", modifiedDeployment.Name, err)
+		}
+
+		if _, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Update(ctx, modifiedDeployment, metav1.UpdateOptions{}); err != nil {
+			return nil, fmt.Errorf("failed to update deployment %q. %v", modifiedDeployment.Name, err)
+		}
+
+		// wait for the deployment to be restarted
+		sleepTime := 2
+		attempts := 30
+		if currentDeployment.Spec.ProgressDeadlineSeconds != nil {
+			// make the attempts double the progress deadline since the pod is both stopping and starting
+			attempts = 2 * (int(*currentDeployment.Spec.ProgressDeadlineSeconds) / sleepTime)
+		}
+		for i := 0; i < attempts; i++ {
+			// check for the status of the deployment
+			d, err := clusterdContext.Clientset.AppsV1().Deployments(namespace).Get(ctx, modifiedDeployment.Name, metav1.GetOptions{})
 			if err != nil {
-				return nil, fmt.Errorf("failed to check if deployment %s can be updated: %+v", deployment.Name, err)
+				return nil, fmt.Errorf("failed to get deployment %q. %v", modifiedDeployment.Name, err)
+			}
+			if d.Status.ObservedGeneration != currentDeployment.Status.ObservedGeneration && d.Status.UpdatedReplicas > 0 && d.Status.ReadyReplicas > 0 {
+				logger.Infof("finished waiting for updated deployment %q", d.Name)
+
+				// Now we check if we can go to the next daemon
+				err = verifyCallback("continue")
+				if err != nil {
+					return nil, fmt.Errorf("failed to check if deployment %q can continue: %v", modifiedDeployment.Name, err)
+				}
+
+				return d, nil
 			}
 
-			return d, nil
+			// If ProgressDeadlineExceeded is reached let's fail earlier
+			// This can happen if one of the deployment cannot be scheduled on a node and stays in "pending" state
+			for _, condition := range d.Status.Conditions {
+				if condition.Type == v1.DeploymentProgressing && condition.Reason == "ProgressDeadlineExceeded" {
+					return nil, fmt.Errorf("gave up waiting for deployment %q to update because %q", modifiedDeployment.Name, condition.Reason)
+				}
+			}
+
+			logger.Debugf("deployment %q status=%+v", d.Name, d.Status)
+			time.Sleep(time.Duration(sleepTime) * time.Second)
 		}
-		logger.Debugf("deployment %s status=%+v", d.Name, d.Status)
-		time.Sleep(time.Duration(sleepTime) * time.Second)
+		return nil, fmt.Errorf("gave up waiting for deployment %q to update", modifiedDeployment.Name)
 	}
 
-	return nil, fmt.Errorf("gave up waiting for deployment %s to update", deployment.Name)
+	logger.Infof("deployment %q did not change, nothing to update", currentDeployment.Name)
+	return nil, nil
 }
 
 // GetDeployments returns a list of deployment names labels matching a given selector
@@ -114,7 +150,8 @@ func UpdateDeploymentAndWait(context *clusterd.Context, deployment *apps.Deploym
 // more: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 func GetDeployments(clientset kubernetes.Interface, namespace, labelSelector string) (*apps.DeploymentList, error) {
 	listOptions := metav1.ListOptions{LabelSelector: labelSelector}
-	deployments, err := clientset.AppsV1().Deployments(namespace).List(listOptions)
+	ctx := context.TODO()
+	deployments, err := clientset.AppsV1().Deployments(namespace).List(ctx, listOptions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list deployments with labelSelector %s: %v", labelSelector, err)
 	}
@@ -124,11 +161,12 @@ func GetDeployments(clientset kubernetes.Interface, namespace, labelSelector str
 // DeleteDeployment makes a best effort at deleting a deployment and its pods, then waits for them to be deleted
 func DeleteDeployment(clientset kubernetes.Interface, namespace, name string) error {
 	logger.Debugf("removing %s deployment if it exists", name)
+	ctx := context.TODO()
 	deleteAction := func(options *metav1.DeleteOptions) error {
-		return clientset.AppsV1().Deployments(namespace).Delete(name, options)
+		return clientset.AppsV1().Deployments(namespace).Delete(ctx, name, *options)
 	}
 	getAction := func() error {
-		_, err := clientset.AppsV1().Deployments(namespace).Get(name, metav1.GetOptions{})
+		_, err := clientset.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		return err
 	}
 	return deleteResourceAndWait(namespace, name, "deployment", deleteAction, getAction)
@@ -137,11 +175,11 @@ func DeleteDeployment(clientset kubernetes.Interface, namespace, name string) er
 // WaitForDeploymentImage waits for all deployments with the given labels are running.
 // WARNING:This is currently only useful for testing!
 func WaitForDeploymentImage(clientset kubernetes.Interface, namespace, label, container string, initContainer bool, desiredImage string) error {
-
+	ctx := context.TODO()
 	sleepTime := 3
 	attempts := 120
 	for i := 0; i < attempts; i++ {
-		deployments, err := clientset.AppsV1().Deployments(namespace).List(metav1.ListOptions{LabelSelector: label})
+		deployments, err := clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{LabelSelector: label})
 		if err != nil {
 			return fmt.Errorf("failed to list deployments with label %s. %v", label, err)
 		}
@@ -192,7 +230,7 @@ func AddRookVersionLabelToObjectMeta(meta *metav1.ObjectMeta) {
 	addRookVersionLabel(meta.Labels)
 }
 
-func AddLabelToDeployement(key, value string, d *v1.Deployment) {
+func AddLabelToDeployment(key, value string, d *v1.Deployment) {
 	if d == nil {
 		return
 	}
@@ -226,11 +264,12 @@ func addLabel(key, value string, labels map[string]string) {
 	labels[key] = value
 }
 
-func CreateDeployment(name, namespace string, clientset kubernetes.Interface, dep *apps.Deployment) error {
-	_, err := clientset.AppsV1().Deployments(namespace).Create(dep)
+func CreateDeployment(clientset kubernetes.Interface, name, namespace string, dep *apps.Deployment) error {
+	ctx := context.TODO()
+	_, err := clientset.AppsV1().Deployments(namespace).Create(ctx, dep, metav1.CreateOptions{})
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
-			_, err = clientset.AppsV1().Deployments(namespace).Update(dep)
+			_, err = clientset.AppsV1().Deployments(namespace).Update(ctx, dep, metav1.UpdateOptions{})
 		}
 		if err != nil {
 			return fmt.Errorf("failed to start %s deployment: %+v\n%+v", name, err, dep)

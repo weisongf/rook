@@ -17,10 +17,12 @@ limitations under the License.
 package installer
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/rook/rook/tests/framework/utils"
+	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -113,13 +115,14 @@ func (h *EdgefsInstaller) CreateEdgefsCluster(namespace string) error {
 }
 
 func (h *EdgefsInstaller) UninstallEdgefs(systemNamespace, namespace string) {
+	ctx := context.TODO()
 	logger.Infof("uninstalling Edgefs from namespace %s", namespace)
 
 	err := h.k8shelper.DeleteResourceAndWait(false, "-n", namespace, "cluster.edgefs.rook.io", namespace)
 	checkError(h.T(), err, fmt.Sprintf("cannot remove cluster %s", namespace))
 
 	crdCheckerFunc := func() error {
-		_, err := h.k8shelper.RookClientset.EdgefsV1().Clusters(namespace).Get(namespace, metav1.GetOptions{})
+		_, err := h.k8shelper.RookClientset.EdgefsV1().Clusters(namespace).Get(ctx, namespace, metav1.GetOptions{})
 		return err
 	}
 
@@ -135,16 +138,19 @@ func (h *EdgefsInstaller) UninstallEdgefs(systemNamespace, namespace string) {
 	checkError(h.T(), err, "cannot uninstall rook-edgefs-operator")
 
 	logger.Info("Removing privileged-psp-user ClusterRoles")
-	h.k8shelper.Clientset.RbacV1().ClusterRoles().Delete("privileged-psp-user", nil)
+	err = h.k8shelper.Clientset.RbacV1().ClusterRoles().Delete(ctx, "privileged-psp-user", metav1.DeleteOptions{})
+	assert.NoError(h.T(), err)
 
 	logger.Info("Removing rook-edgefs-cluster-psp ClusterRoleBinding")
-	h.k8shelper.Clientset.RbacV1().ClusterRoleBindings().Delete("rook-edgefs-cluster-psp", nil)
+	err = h.k8shelper.Clientset.RbacV1().ClusterRoleBindings().Delete(ctx, "rook-edgefs-cluster-psp", metav1.DeleteOptions{})
+	assert.NoError(h.T(), err)
 
 	logger.Info("Removing rook-edgefs-system-psp ClusterRoleBinding")
-	h.k8shelper.Clientset.RbacV1().ClusterRoleBindings().Delete("rook-edgefs-system-psp", nil)
+	err = h.k8shelper.Clientset.RbacV1().ClusterRoleBindings().Delete(ctx, "rook-edgefs-system-psp", metav1.DeleteOptions{})
+	assert.NoError(h.T(), err)
 
 	err = h.k8shelper.DeleteResourceAndWait(false, "podsecuritypolicy", "privileged")
-	checkError(h.T(), err, fmt.Sprintf("cannot delete podsecuritypolicy `privileged`"))
+	checkError(h.T(), err, "cannot delete podsecuritypolicy `privileged`")
 
 	err = h.k8shelper.DeleteResourceAndWait(false, "namespace", namespace)
 	checkError(h.T(), err, fmt.Sprintf("cannot delete namespace %s", namespace))
@@ -152,10 +158,10 @@ func (h *EdgefsInstaller) UninstallEdgefs(systemNamespace, namespace string) {
 }
 
 func (h *EdgefsInstaller) GatherAllEdgefsLogs(systemNamespace, namespace, testName string) {
-	if !h.T().Failed() && Env.Logs != "all" {
+	if !h.T().Failed() && TestLogCollectionLevel() != "all" {
 		return
 	}
 	logger.Infof("Gathering all logs from edgefs cluster %s", namespace)
-	h.k8shelper.GetLogsFromNamespace(systemNamespace, testName, Env.HostType)
-	h.k8shelper.GetLogsFromNamespace(namespace, testName, Env.HostType)
+	h.k8shelper.GetLogsFromNamespace(systemNamespace, testName, utils.TestEnvName())
+	h.k8shelper.GetLogsFromNamespace(namespace, testName, utils.TestEnvName())
 }

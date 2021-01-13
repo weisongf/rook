@@ -16,12 +16,13 @@ limitations under the License.
 package cluster
 
 import (
+	"context"
 	"os"
 	"testing"
 	"time"
 
 	edgefsv1 "github.com/rook/rook/pkg/apis/edgefs.rook.io/v1"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	rookfake "github.com/rook/rook/pkg/client/clientset/versioned/fake"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
@@ -39,7 +40,7 @@ func TestClusterDelete(t *testing.T) {
 	os.Setenv(k8sutil.PodNamespaceEnvVar, rookSystemNamespace)
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
 
-	clientset := testop.New(3)
+	clientset := testop.New(t, 3)
 	context := &clusterd.Context{
 		Clientset: clientset,
 	}
@@ -47,52 +48,53 @@ func TestClusterDelete(t *testing.T) {
 	// create the cluster controller and tell it that the cluster has been deleted
 	controller := NewClusterController(context, "")
 	clusterToDelete := &edgefsv1.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: clusterName}}
-	controller.handleDelete(clusterToDelete, time.Microsecond)
+	controller.handleDelete(clusterToDelete, time.Microsecond) //nolint, condition when cluster doesn't exist needs to check
 }
 
 func TestClusterChanged(t *testing.T) {
 	// a new node added, should be a change
 	old := edgefsv1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{
-			Nodes: []rookalpha.Node{
-				{Name: "node1", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
+		Storage: rookv1.StorageScopeSpec{
+			Nodes: []rookv1.Node{
+				{Name: "node1", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
 			},
 		},
 	}
 	new := edgefsv1.ClusterSpec{
-		Storage: rookalpha.StorageScopeSpec{
-			Nodes: []rookalpha.Node{
-				{Name: "node1", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
-				{Name: "node2", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
+		Storage: rookv1.StorageScopeSpec{
+			Nodes: []rookv1.Node{
+				{Name: "node1", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
+				{Name: "node2", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
 			},
 		},
 	}
 	assert.True(t, clusterChanged(old, new))
 
 	// a node was removed, should be a change
-	old.Storage.Nodes = []rookalpha.Node{
-		{Name: "node1", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
-		{Name: "node2", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
+	old.Storage.Nodes = []rookv1.Node{
+		{Name: "node1", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
+		{Name: "node2", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
 	}
-	new.Storage.Nodes = []rookalpha.Node{
-		{Name: "node1", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
+	new.Storage.Nodes = []rookv1.Node{
+		{Name: "node1", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
 	}
 	assert.True(t, clusterChanged(old, new))
 
 	// the nodes being in a different order should not be a change
-	old.Storage.Nodes = []rookalpha.Node{
-		{Name: "node1", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
-		{Name: "node2", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
+	old.Storage.Nodes = []rookv1.Node{
+		{Name: "node1", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
+		{Name: "node2", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
 	}
-	new.Storage.Nodes = []rookalpha.Node{
-		{Name: "node2", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
-		{Name: "node1", Selection: rookalpha.Selection{Devices: []rookalpha.Device{{Name: "sda"}}}},
+	new.Storage.Nodes = []rookv1.Node{
+		{Name: "node2", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
+		{Name: "node1", Selection: rookv1.Selection{Devices: []rookv1.Device{{Name: "sda"}}}},
 	}
 	assert.False(t, clusterChanged(old, new))
 }
 
 func TestRemoveFinalizer(t *testing.T) {
-	clientset := testop.New(3)
+	ctx := context.TODO()
+	clientset := testop.New(t, 3)
 	context := &clusterd.Context{
 		Clientset:     clientset,
 		RookClientset: rookfake.NewSimpleClientset(),
@@ -111,7 +113,7 @@ func TestRemoveFinalizer(t *testing.T) {
 	}
 
 	// create the cluster initially so it exists in the k8s api
-	cluster, err := context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Create(cluster)
+	cluster, err := context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Create(ctx, cluster, metav1.CreateOptions{})
 	assert.NoError(t, err)
 	assert.Len(t, cluster.Finalizers, 1)
 
@@ -119,7 +121,7 @@ func TestRemoveFinalizer(t *testing.T) {
 	controller.removeFinalizer(cluster)
 
 	// verify the finalier was removed
-	cluster, err = context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Get(cluster.Name, metav1.GetOptions{})
+	cluster, err = context.RookClientset.EdgefsV1().Clusters(cluster.Namespace).Get(ctx, cluster.Name, metav1.GetOptions{})
 	assert.NoError(t, err)
 	assert.NotNil(t, cluster)
 	assert.Len(t, cluster.Finalizers, 0)

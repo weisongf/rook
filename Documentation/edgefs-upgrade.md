@@ -6,6 +6,8 @@ indent: true
 
 # EdgeFS Upgrades
 
+[Deprecated](https://github.com/rook/rook/issues/5823#issuecomment-703834989)
+
 This guide will walk you through the manual steps to upgrade the software in a Rook EdgeFS cluster
 from one version to the next. Rook EdgeFS is a multi-cloud distributed software system and
 therefore there are multiple components to individually upgrade in the sequence defined in this
@@ -56,7 +58,7 @@ And replace EdgeFS operator to new stable 'v1' version
 kubectl -n rook-edgefs-system set image deploy/rook-edgefs-operator rook-edgefs-operator=rook/edgefs:v1.1.0
 ```
 
-Then you could update your cluster's EdgeFS image for latest one as discribed below.
+Then you could update your cluster's EdgeFS image for latest one as described below.
 
 ## EdgeFS Version Upgrade
 
@@ -142,3 +144,13 @@ Currently we adding new node `node3072ub16` with two drives `sdb` and `sdc` on i
 
 * Save CRD and operator will update all target nodes and related pods of the EdgeFS cluster.
 * Login to EdgeFS mgr toolbox and adjust FlexHash table to a new configuration using `efscli system fhtable` command.
+
+
+## EdgeFS Operator Upgrade
+
+In terms of to bring new Rook Operator features on a running system, it needs to be upgraded first.
+And once upgraded, you will need to create new CustomResourceDefinition(s).
+
+1. Edit deployment with `kubectl edit deploy rook-edgefs-operator -n rook-edgefs-system` and set to a new version
+2. Apply new CRDs or changes. Look at examples in cluster/examples/kubernetes/edgefs/operator.yaml.
+3. Monitor operator logs with `kubectl logs rook-edgefs-operator-ID -n rook-edgefs-system`

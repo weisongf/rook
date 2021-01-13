@@ -1,5 +1,5 @@
 spec:
-  replaces:  rook-ceph.v1.0.1
+  replaces:  rook-ceph.v1.1.1
   customresourcedefinitions:
     owned:
       - kind: CephCluster
@@ -118,6 +118,36 @@ spec:
         version: v1
         displayName: Ceph NFS
         description: Represents a cluster of Ceph NFS ganesha gateways.
+      - kind: CephClient
+        name: cephclients.ceph.rook.io
+        version: v1
+        displayName: Ceph Client
+        description: Represents a Ceph User.
+      - kind: CephFilesystem
+        name: cephfilesystems.ceph.rook.io
+        version: v1
+        displayName: Ceph Filesystem
+        description: Represents a Ceph Filesystem.
+      - kind: CephRBDMirror
+        name: cephrbdmirrors.ceph.rook.io
+        version: v1
+        displayName: Ceph RBD Mirror
+        description: Represents a Ceph RBD Mirror.
+      - kind: CephObjectRealm
+        name: cephobjectrealms.ceph.rook.io
+        version: v1
+        displayName: Ceph Object Store Realm
+        description: Represents a Ceph Object Store Realm.
+      - kind: CephObjectZoneGroup
+        name: cephobjectzonegroups.ceph.rook.io
+        version: v1
+        displayName: Ceph Object Store Zone Group
+        description: Represents a Ceph Object Store Zone Group.
+      - kind: CephObjectZone
+        name: cephobjectzones.ceph.rook.io
+        version: v1
+        displayName: Ceph Object Store Zone
+        description: Represents a Ceph Object Store Zone.
   displayName: Rook-Ceph
   description: |
 
@@ -174,7 +204,7 @@ metadata:
   annotations:
     tectonic-visibility: ocs
     repository: https://github.com/rook/rook
-    containerImage: rook/ceph:v1.0.1
+    containerImage: rook/ceph:v1.2.2
     alm-examples: |-
       [
         {
@@ -186,7 +216,7 @@ metadata:
           },
           "spec": {
             "cephVersion": {
-              "image": "ceph/ceph:v14.2.5"
+              "image": "ceph/ceph:v15.2.8"
             },
             "dataDirHostPath": "/var/lib/rook",
             "mon": {
@@ -284,6 +314,88 @@ metadata:
               "annotations": null,
               "resources": null
             }
+          }
+        },
+        {
+          "apiVersion": "ceph.rook.io/v1",
+          "kind": "CephClient",
+          "metadata": {
+            "name": "cinder",
+            "namespace": "rook-ceph"
+          },
+          "spec": {
+            "caps": {
+              "mon": "profile rbd",
+              "osd": "profile rbd pool=volumes, profile rbd pool=vms, profile rbd-read-only pool=images"
+            }
+          }
+        },
+        {
+          "apiVersion": "ceph.rook.io/v1",
+          "kind": "CephFilesystem",
+          "metadata": {
+            "name": "myfs",
+            "namespace": "rook-ceph"
+          },
+          "spec": {
+            "dataPools": [
+              {
+                "compressionMode": "",
+                "crushRoot": "",
+                "deviceClass": "",
+                "erasureCoded": {
+                  "algorithm": "",
+                  "codingChunks": 0,
+                  "dataChunks": 0
+                },
+                "failureDomain": "host",
+                "replicated": {
+                  "requireSafeReplicaSize": false,
+                  "size": 1,
+                  "targetSizeRatio": 0.5
+                }
+              }
+            ],
+            "metadataPool": {
+              "compressionMode": "",
+              "crushRoot": "",
+              "deviceClass": "",
+              "erasureCoded": {
+                "algorithm": "",
+                "codingChunks": 0,
+                "dataChunks": 0
+              },
+              "failureDomain": "",
+              "replicated": {
+                "requireSafeReplicaSize": false,
+                "size": 1,
+                "targetSizeRatio": 0
+              }
+            },
+            "metadataServer": {
+              "activeCount": 1,
+              "activeStandby": true,
+              "placement": {},
+              "resources": {}
+            },
+            "preservePoolsOnDelete": false,
+            "preserveFilesystemOnDelete": false
+          }
+        },
+        {
+          "apiVersion": "ceph.rook.io/v1",
+          "kind": "CephRBDMirror",
+          "metadata": {
+            "name": "my-rbd-mirror",
+            "namespace": "rook-ceph"
+          },
+          "spec": {
+            "annotations": null,
+            "count": 1,
+            "placement": {
+              "topologyKey": "kubernetes.io/hostname"
+            },
+            "resources": null
           }
         }
       ]

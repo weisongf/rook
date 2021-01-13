@@ -17,15 +17,18 @@ limitations under the License.
 package test
 
 import (
+	"context"
 	"fmt"
+	"testing"
 
-	"k8s.io/api/core/v1"
+	"github.com/stretchr/testify/assert"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
 // New creates a fake K8s cluster
-func New(nodes int) *fake.Clientset {
+func New(t *testing.T, nodes int) *fake.Clientset {
 	clientset := fake.NewSimpleClientset()
 	for i := 0; i < nodes; i++ {
 		ready := v1.NodeCondition{Type: v1.NodeReady, Status: v1.ConditionTrue}
@@ -40,13 +43,14 @@ func New(nodes int) *fake.Clientset {
 				},
 				Addresses: []v1.NodeAddress{
 					{
-						Type:    v1.NodeExternalIP,
+						Type:    v1.NodeInternalIP,
 						Address: fmt.Sprintf("%d.%d.%d.%d", i, i, i, i),
 					},
 				},
 			},
 		}
-		clientset.CoreV1().Nodes().Create(n)
+		_, err := clientset.CoreV1().Nodes().Create(context.TODO(), n, metav1.CreateOptions{})
+		assert.Nil(t, err)
 	}
 	return clientset
 }

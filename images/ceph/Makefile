@@ -17,10 +17,14 @@ include ../image.mk
 # ====================================================================================
 # Image Build Options
 
-CEPH_VERSION = v14.2.5-20191210
+ifeq ($(GOARCH),amd64)
+CEPH_VERSION = v15.2.8-20201217
+else
+CEPH_VERSION = v15.2.8-20201217
+endif
 BASEIMAGE = ceph/ceph-$(GOARCH):$(CEPH_VERSION)
 CEPH_IMAGE = $(BUILD_REGISTRY)/ceph-$(GOARCH)
-OPERATOR_SDK_VERSION = v0.10.0
+OPERATOR_SDK_VERSION = v0.17.1
 GOHOST := GOOS=$(GOHOSTOS) GOARCH=$(GOHOSTARCH) go
 
 TEMP := $(shell mktemp -d)
@@ -37,13 +41,15 @@ YQ := $(TOOLS_HOST_DIR)/yq
 # Build Rook
 
 do.build: generate-csv-ceph-templates
-	@echo === docker build $(CEPH_IMAGE)
+	@echo === container build $(CEPH_IMAGE)
 	@cp Dockerfile $(TEMP)
 	@cp toolbox.sh $(TEMP)
 	@cp $(OUTPUT_DIR)/bin/linux_$(GOARCH)/rook $(TEMP)
 	@cp $(OUTPUT_DIR)/bin/linux_$(GOARCH)/rookflex $(TEMP)
 	@cp -r ../../cluster/examples/kubernetes/ceph/csi/template $(TEMP)/ceph-csi
 	@cp -r ../../cluster/examples/kubernetes/ceph/monitoring $(TEMP)/ceph-monitoring
+	@mkdir -p $(TEMP)/rook-external
+	@cp ../../cluster/examples/kubernetes/ceph/create-external-cluster-resources.* $(TEMP)/rook-external/
 	@if [ ! "$(INCLUDE_CSV_TEMPLATES)" = "" ]; then\
 		cp -r ../../cluster/olm/ceph/templates $(TEMP)/ceph-csv-templates;\
 	else\
@@ -65,7 +71,7 @@ generate-csv-ceph-templates: $(OPERATOR_SDK) $(YQ)
 $(YQ):
 	@if [ ! "$(INCLUDE_CSV_TEMPLATES)" = "" ]; then\
 		echo === installing yq $(GOHOST);\
-		curl -JL https://github.com/mikefarah/yq/releases/download/2.4.1/yq_$(HOST_PLATFORM) -o $(YQ);\
+		curl -JL https://github.com/mikefarah/yq/releases/download/3.3.0/yq_$(HOST_PLATFORM) -o $(YQ);\
 		chmod +x $(YQ);\
 	fi
 

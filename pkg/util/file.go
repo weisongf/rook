@@ -32,7 +32,7 @@ func WriteFile(filePath string, contentBuffer bytes.Buffer) error {
 	if err := os.MkdirAll(dir, 0744); err != nil {
 		return fmt.Errorf("failed to create config file directory at %s: %+v", dir, err)
 	}
-	if err := ioutil.WriteFile(filePath, contentBuffer.Bytes(), 0644); err != nil {
+	if err := ioutil.WriteFile(filePath, contentBuffer.Bytes(), 0600); err != nil {
 		return fmt.Errorf("failed to write config file to %s: %+v", filePath, err)
 	}
 
@@ -40,7 +40,7 @@ func WriteFile(filePath string, contentBuffer bytes.Buffer) error {
 }
 
 func WriteFileToLog(logger *capnslog.PackageLogger, path string) {
-	contents, err := ioutil.ReadFile(path)
+	contents, err := ioutil.ReadFile(filepath.Clean(path))
 	if err != nil {
 		logger.Warningf("failed to write file %s to log: %+v", path, err)
 		return

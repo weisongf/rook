@@ -22,8 +22,13 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/coreos/pkg/capnslog"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+)
+
+var (
+	logger = capnslog.NewPackageLogger("github.com/rook/rook", "op-flags")
 )
 
 func VerifyRequiredFlags(cmd *cobra.Command, requiredFlags []string) error {
@@ -31,38 +36,6 @@ func VerifyRequiredFlags(cmd *cobra.Command, requiredFlags []string) error {
 	for _, reqFlag := range requiredFlags {
 		val, err := cmd.Flags().GetString(reqFlag)
 		if err != nil || val == "" {
-			missingFlags = append(missingFlags, reqFlag)
-		}
-	}
-
-	return createRequiredFlagError(cmd.Name(), missingFlags)
-}
-
-type RenamedFlag struct {
-	NewFlagName string
-	OldFlagName string
-}
-
-func VerifyRenamedFlags(cmd *cobra.Command, renamedFlags []RenamedFlag) error {
-	var missingFlags []string
-	for _, renamedFlag := range renamedFlags {
-		val, err := cmd.Flags().GetString(renamedFlag.NewFlagName)
-		if err != nil || val == "" {
-			val, err := cmd.Flags().GetString(renamedFlag.OldFlagName)
-			if err != nil || val == "" {
-				missingFlags = append(missingFlags, renamedFlag.NewFlagName)
-			}
-		}
-	}
-
-	return createRequiredFlagError(cmd.Name(), missingFlags)
-}
-
-func VerifyRequiredUint64Flags(cmd *cobra.Command, requiredFlags []string) error {
-	var missingFlags []string
-	for _, reqFlag := range requiredFlags {
-		val, err := cmd.Flags().GetUint64(reqFlag)
-		if err != nil || val == 0 {
 			missingFlags = append(missingFlags, reqFlag)
 		}
 	}
@@ -86,21 +59,30 @@ func SetLoggingFlags(flags *pflag.FlagSet) {
 	//Add commandline flags to the flagset. We will always write to stderr
 	//and not to a file by default
 	flags.AddGoFlagSet(flag.CommandLine)
-	flags.Set("logtostderr", "true")
-	flags.Parse(nil)
+	if err := flags.Set("logtostderr", "true"); err != nil {
+		logger.Infof("failed to set flag %q. %v", "logtostderr", err)
+	}
+	if err := flags.Parse(nil); err != nil {
+		panic(err)
+	}
 }
 
-func SetFlagsFromEnv(flags *pflag.FlagSet, prefix string) error {
+func SetFlagsFromEnv(flags *pflag.FlagSet, prefix string) {
+	var errorFlag bool
+	var err error
 	flags.VisitAll(func(f *pflag.Flag) {
 		envVar := prefix + "_" + strings.Replace(strings.ToUpper(f.Name), "-", "_", -1)
 		value := os.Getenv(envVar)
 		if value != "" {
 			// Set the environment variable. Will override default values, but be overridden by command line parameters.
-			flags.Set(f.Name, value)
+			if err = flags.Set(f.Name, value); err != nil {
+				errorFlag = true
+			}
 		}
 	})
-
-	return nil
+	if errorFlag {
+		logger.Error("failed to set flag ", err)
+	}
 }
 
 // GetFlagsAndValues returns all flags and their values as a slice with elements in the format of

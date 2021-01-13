@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"sync"
 
 	"github.com/coreos/pkg/capnslog"
 	"github.com/pkg/errors"
@@ -39,28 +38,26 @@ const (
 )
 
 var (
-	// Minimum supported version is 13.2.4 where ceph-volume is supported
-	Minimum = CephVersion{13, 2, 4, 0}
-	// Luminous Ceph version
-	Luminous = CephVersion{12, 0, 0, 0}
-	// Mimic Ceph version
-	Mimic = CephVersion{13, 0, 0, 0}
+	// Minimum supported version is 14.2.5
+	Minimum = CephVersion{14, 2, 5, 0}
 	// Nautilus Ceph version
 	Nautilus = CephVersion{14, 0, 0, 0}
 	// Octopus Ceph version
 	Octopus = CephVersion{15, 0, 0, 0}
+	// Pacific Ceph version
+	Pacific = CephVersion{16, 0, 0, 0}
+
+	// cephVolumeLVMDiskSortingCephVersion introduced a major regression in c-v and thus is not suitable for production
+	cephVolumeLVMDiskSortingCephVersion = CephVersion{Major: 14, Minor: 2, Extra: 13}
 
 	// supportedVersions are production-ready versions that rook supports
-	supportedVersions   = []CephVersion{Mimic, Nautilus}
-	unsupportedVersions = []CephVersion{Octopus}
-	// allVersions includes all supportedVersions as well as unreleased versions that are being tested with rook
-	allVersions = append(supportedVersions, unsupportedVersions...)
+	supportedVersions = []CephVersion{Nautilus, Octopus}
+
+	// unsupportedVersions are possibly Ceph pin-point release that introduced breaking changes and not recommended
+	unsupportedVersions = []CephVersion{cephVolumeLVMDiskSortingCephVersion}
 
 	// for parsing the output of `ceph --version`
 	versionPattern = regexp.MustCompile(`ceph version (\d+)\.(\d+)\.(\d+)`)
-	// for storage of the versions of images for access in managed reconciliations
-	imageToVersionMap     = map[string]CephVersion{}
-	imageToVersionMapLock = &sync.Mutex{}
 
 	// For a build release the output is "ceph version 14.2.4-64.el8cp"
 	// So we need to detect the build version change
@@ -83,12 +80,12 @@ func (v *CephVersion) CephVersionFormatted() string {
 // ReleaseName is the name of the Ceph release
 func (v *CephVersion) ReleaseName() string {
 	switch v.Major {
-	case Octopus.Major:
-		return "octopus"
 	case Nautilus.Major:
 		return "nautilus"
-	case Mimic.Major:
-		return "mimic"
+	case Octopus.Major:
+		return "octopus"
+	case Pacific.Major:
+		return "pacific"
 	default:
 		return unknownVersionString
 	}
@@ -140,13 +137,37 @@ func (v *CephVersion) Supported() bool {
 	return false
 }
 
+// Unsupported checks if a given release is supported
+func (v *CephVersion) Unsupported() bool {
+	for _, sv := range unsupportedVersions {
+		if v.isExactly(sv) {
+			return true
+		}
+	}
+	return false
+}
+
 func (v *CephVersion) isRelease(other CephVersion) bool {
 	return v.Major == other.Major
 }
 
-// IsMimic checks if the Ceph version is Mimic
-func (v *CephVersion) IsMimic() bool {
-	return v.isRelease(Mimic)
+func (v *CephVersion) isExactly(other CephVersion) bool {
+	return v.Major == other.Major && v.Minor == other.Minor && v.Extra == other.Extra
+}
+
+// IsNautilus checks if the Ceph version is Nautilus
+func (v *CephVersion) IsNautilus() bool {
+	return v.isRelease(Nautilus)
+}
+
+// IsOctopus checks if the Ceph version is Octopus
+func (v *CephVersion) IsOctopus() bool {
+	return v.isRelease(Octopus)
+}
+
+// IsPacific checks if the Ceph version is Pacific
+func (v *CephVersion) IsPacific() bool {
+	return v.isRelease(Pacific)
 }
 
 // IsAtLeast checks a given Ceph version is at least a given one
@@ -172,6 +193,11 @@ func (v *CephVersion) IsAtLeast(other CephVersion) bool {
 	return true
 }
 
+// IsAtLeastPacific check that the Ceph version is at least Pacific
+func (v *CephVersion) IsAtLeastPacific() bool {
+	return v.IsAtLeast(Pacific)
+}
+
 // IsAtLeastOctopus check that the Ceph version is at least Octopus
 func (v *CephVersion) IsAtLeastOctopus() bool {
 	return v.IsAtLeast(Octopus)
@@ -180,11 +206,6 @@ func (v *CephVersion) IsAtLeastOctopus() bool {
 // IsAtLeastNautilus check that the Ceph version is at least Nautilus
 func (v *CephVersion) IsAtLeastNautilus() bool {
 	return v.IsAtLeast(Nautilus)
-}
-
-// IsAtLeastMimic check that the Ceph version is at least Mimic
-func (v *CephVersion) IsAtLeastMimic() bool {
-	return v.IsAtLeast(Mimic)
 }
 
 // IsIdentical checks if Ceph versions are identical
@@ -297,19 +318,4 @@ func ValidateCephVersionsBetweenLocalAndExternalClusters(localVersion, externalV
 	}
 
 	return nil
-}
-
-// RegisterImageVersion stores the CephVersion detected for a specified image for global access.
-func RegisterImageVersion(image string, version CephVersion) {
-	imageToVersionMapLock.Lock()
-	imageToVersionMap[image] = version
-	imageToVersionMapLock.Unlock()
-}
-
-// GetImageVersion returns the CephVersion registered for a specified image (if any) and whether any image was found.
-func GetImageVersion(image string) (*CephVersion, bool) {
-	imageToVersionMapLock.Lock()
-	version, ok := imageToVersionMap[image]
-	imageToVersionMapLock.Unlock()
-	return &version, ok
 }

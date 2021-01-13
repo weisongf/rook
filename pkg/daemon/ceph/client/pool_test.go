@@ -16,11 +16,14 @@ limitations under the License.
 package client
 
 import (
+	"os/exec"
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/pkg/errors"
-	"github.com/rook/rook/pkg/daemon/ceph/model"
+	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
 	"github.com/stretchr/testify/assert"
 
@@ -28,26 +31,49 @@ import (
 )
 
 func TestCreateECPoolWithOverwrites(t *testing.T) {
-	p := CephStoragePoolDetails{Name: "mypool", Size: 12345, ErasureCodeProfile: "myecprofile", FailureDomain: "host"}
+	testCreateECPool(t, true, "")
+}
+
+func TestCreateECPoolWithoutOverwrites(t *testing.T) {
+	testCreateECPool(t, false, "")
+}
+
+func TestCreateECPoolWithCompression(t *testing.T) {
+	testCreateECPool(t, false, "aggressive")
+	testCreateECPool(t, true, "none")
+}
+
+func testCreateECPool(t *testing.T, overwrite bool, compressionMode string) {
+	poolName := "mypool"
+	compressionModeCreated := false
+	p := cephv1.PoolSpec{
+		FailureDomain: "host",
+		ErasureCoded:  cephv1.ErasureCodedSpec{},
+	}
+	if compressionMode != "" {
+		p.CompressionMode = compressionMode
+	}
 	executor := &exectest.MockExecutor{}
 	context := &clusterd.Context{Executor: executor}
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		if args[1] == "pool" {
 			if args[2] == "create" {
 				assert.Equal(t, "mypool", args[3])
 				assert.Equal(t, "erasure", args[5])
-				assert.Equal(t, p.ErasureCodeProfile, args[6])
+				assert.Equal(t, "mypoolprofile", args[6])
 				return "", nil
 			}
 			if args[2] == "set" {
+				assert.Equal(t, "mypool", args[3])
 				if args[4] == "allow_ec_overwrites" {
-					assert.Equal(t, "mypool", args[3])
+					assert.Equal(t, true, overwrite)
 					assert.Equal(t, "true", args[5])
 					return "", nil
-				} else if args[4] == "min_size" {
-					assert.Equal(t, "mypool", args[3])
-					assert.Equal(t, "1", args[5])
+				}
+				if args[4] == "compression_mode" {
+					assert.Equal(t, compressionMode, args[5])
+					compressionModeCreated = true
 					return "", nil
 				}
 			}
@@ -61,70 +87,52 @@ func TestCreateECPoolWithOverwrites(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 
-	err := CreateECPoolForApp(context, "myns", p, "myapp", true, model.ErasureCodedPoolConfig{DataChunkCount: 1})
+	err := CreateECPoolForApp(context, AdminClusterInfo("mycluster"), poolName, "mypoolprofile", p, DefaultPGCount, "myapp", overwrite)
 	assert.Nil(t, err)
-}
-
-func TestCreateECPoolWithoutOverwrites(t *testing.T) {
-	p := CephStoragePoolDetails{Name: "mypool", Size: 12345, ErasureCodeProfile: "myecprofile", FailureDomain: "host"}
-	executor := &exectest.MockExecutor{}
-	context := &clusterd.Context{Executor: executor}
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
-		logger.Infof("Command: %s %v", command, args)
-		if args[1] == "pool" {
-			if args[2] == "create" {
-				assert.Equal(t, "mypool", args[3])
-				assert.Equal(t, "erasure", args[5])
-				assert.Equal(t, p.ErasureCodeProfile, args[6])
-				return "", nil
-			}
-			if args[2] == "set" {
-				assert.Equal(t, "mypool", args[3])
-				assert.Equal(t, "min_size", args[4])
-				assert.Equal(t, "1", args[5])
-				return "", nil
-			}
-			if args[2] == "application" {
-				assert.Equal(t, "enable", args[3])
-				assert.Equal(t, "mypool", args[4])
-				assert.Equal(t, "myapp", args[5])
-				return "", nil
-			}
-		}
-		return "", errors.Errorf("unexpected ceph command %q", args)
+	if compressionMode != "" {
+		assert.True(t, compressionModeCreated)
+	} else {
+		assert.False(t, compressionModeCreated)
 	}
-
-	err := CreateECPoolForApp(context, "myns", p, "myapp", false, model.ErasureCodedPoolConfig{DataChunkCount: 1})
-	assert.Nil(t, err)
 }
 
-func TestCreateReplicaPool(t *testing.T) {
-	testCreateReplicaPool(t, "", "", "")
-}
 func TestCreateReplicaPoolWithFailureDomain(t *testing.T) {
-	testCreateReplicaPool(t, "osd", "mycrushroot", "")
+	testCreateReplicaPool(t, "osd", "mycrushroot", "", "")
 }
 
 func TestCreateReplicaPoolWithDeviceClass(t *testing.T) {
-	testCreateReplicaPool(t, "osd", "mycrushroot", "hdd")
+	testCreateReplicaPool(t, "osd", "mycrushroot", "hdd", "")
 }
 
-func testCreateReplicaPool(t *testing.T, failureDomain, crushRoot, deviceClass string) {
+func TestCreateReplicaPoolWithCompression(t *testing.T) {
+	testCreateReplicaPool(t, "osd", "mycrushroot", "hdd", "passive")
+	testCreateReplicaPool(t, "osd", "mycrushroot", "hdd", "force")
+}
+
+func testCreateReplicaPool(t *testing.T, failureDomain, crushRoot, deviceClass, compressionMode string) {
 	crushRuleCreated := false
+	compressionModeCreated := false
 	executor := &exectest.MockExecutor{}
 	context := &clusterd.Context{Executor: executor}
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		if args[1] == "pool" {
 			if args[2] == "create" {
 				assert.Equal(t, "mypool", args[3])
 				assert.Equal(t, "replicated", args[5])
+				assert.Equal(t, "--size", args[7])
+				assert.Equal(t, "12345", args[8])
 				return "", nil
 			}
 			if args[2] == "set" {
 				assert.Equal(t, "mypool", args[3])
-				assert.Equal(t, "size", args[4])
-				assert.Equal(t, "12345", args[5])
+				if args[4] == "size" {
+					assert.Equal(t, "12345", args[5])
+				}
+				if args[4] == "compression_mode" {
+					assert.Equal(t, compressionMode, args[5])
+					compressionModeCreated = true
+				}
 				return "", nil
 			}
 			if args[2] == "application" {
@@ -140,7 +148,7 @@ func testCreateReplicaPool(t *testing.T, failureDomain, crushRoot, deviceClass s
 			assert.Equal(t, "create-replicated", args[3])
 			assert.Equal(t, "mypool", args[4])
 			if crushRoot == "" {
-				assert.Equal(t, "default", args[5])
+				assert.Equal(t, "cluster-crush-root", args[5])
 			} else {
 				assert.Equal(t, crushRoot, args[5])
 			}
@@ -159,10 +167,22 @@ func testCreateReplicaPool(t *testing.T, failureDomain, crushRoot, deviceClass s
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 
-	p := CephStoragePoolDetails{Name: "mypool", Size: 12345, FailureDomain: failureDomain, CrushRoot: crushRoot, DeviceClass: deviceClass}
-	err := CreateReplicatedPoolForApp(context, "myns", p, "myapp")
+	p := cephv1.PoolSpec{
+		FailureDomain: failureDomain, CrushRoot: crushRoot, DeviceClass: deviceClass,
+		Replicated: cephv1.ReplicatedSpec{Size: 12345},
+	}
+	if compressionMode != "" {
+		p.CompressionMode = compressionMode
+	}
+	clusterSpec := &cephv1.ClusterSpec{Storage: rookv1.StorageScopeSpec{Config: map[string]string{CrushRootConfigKey: "cluster-crush-root"}}}
+	err := CreateReplicatedPoolForApp(context, AdminClusterInfo("mycluster"), clusterSpec, "mypool", p, DefaultPGCount, "myapp")
 	assert.Nil(t, err)
 	assert.True(t, crushRuleCreated)
+	if compressionMode != "" {
+		assert.True(t, compressionModeCreated)
+	} else {
+		assert.False(t, compressionModeCreated)
+	}
 }
 
 func testIsStringInSlice(a string, list []string) bool {
@@ -184,7 +204,7 @@ func TestGetPoolStatistics(t *testing.T) {
 	p.Trash.SnapCount = 0
 	executor := &exectest.MockExecutor{}
 	context := &clusterd.Context{Executor: executor}
-	executor.MockExecuteCommandWithOutput = func(debug bool, actionName string, command string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutput = func(command string, args ...string) (string, error) {
 		a := "{\"images\":{\"count\":1,\"provisioned_bytes\":1024,\"snap_count\":1},\"trash\":{\"count\":1,\"provisioned_bytes\":2048,\"snap_count\":0}}"
 		logger.Infof("Command: %s %v", command, args)
 
@@ -200,11 +220,184 @@ func TestGetPoolStatistics(t *testing.T) {
 		return "", errors.Errorf("unexpected rbd command %q", args)
 	}
 
-	stats, err := GetPoolStatistics(context, "replicapool", "cluster")
+	clusterInfo := AdminClusterInfo("mycluster")
+	stats, err := GetPoolStatistics(context, clusterInfo, "replicapool")
 	assert.Nil(t, err)
 	assert.True(t, reflect.DeepEqual(stats, &p))
 
-	stats, err = GetPoolStatistics(context, "rbd", "cluster")
+	stats, err = GetPoolStatistics(context, clusterInfo, "rbd")
 	assert.NotNil(t, err)
 	assert.Nil(t, stats)
+}
+
+func TestSetPoolReplicatedSizeProperty(t *testing.T) {
+	poolName := "mypool"
+	executor := &exectest.MockExecutor{}
+	context := &clusterd.Context{Executor: executor}
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+
+		if args[2] == "set" {
+			assert.Equal(t, poolName, args[3])
+			assert.Equal(t, "size", args[4])
+			assert.Equal(t, "3", args[5])
+			return "", nil
+		}
+
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+
+	err := SetPoolReplicatedSizeProperty(context, AdminClusterInfo("mycluster"), poolName, "3")
+	assert.NoError(t, err)
+
+	// TEST POOL SIZE 1 AND RequireSafeReplicaSize True
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+
+		if args[2] == "set" {
+			assert.Equal(t, "mypool", args[3])
+			assert.Equal(t, "size", args[4])
+			assert.Equal(t, "1", args[5])
+			assert.Equal(t, "--yes-i-really-mean-it", args[6])
+			return "", nil
+		}
+
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+
+	err = SetPoolReplicatedSizeProperty(context, AdminClusterInfo("mycluster"), poolName, "1")
+	assert.NoError(t, err)
+}
+
+func TestCreateStretchCrushRule(t *testing.T) {
+	testCreateStretchCrushRule(t, true)
+	testCreateStretchCrushRule(t, false)
+}
+
+func testCreateStretchCrushRule(t *testing.T, alreadyExists bool) {
+	executor := &exectest.MockExecutor{}
+	context := &clusterd.Context{Executor: executor}
+	executor.MockExecuteCommandWithOutput = func(command string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+		if args[0] == "osd" {
+			if args[1] == "getcrushmap" {
+				return "", nil
+			}
+			if args[1] == "setcrushmap" {
+				if alreadyExists {
+					return "", errors.New("setcrushmap not expected for already existing crush rule")
+				}
+				return "", nil
+			}
+		}
+		if command == "crushtool" {
+			switch {
+			case args[0] == "--decompile" || args[0] == "--compile":
+				if alreadyExists {
+					return "", errors.New("--compile or --decompile not expected for already existing crush rule")
+				}
+				return "", nil
+			}
+		}
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command (file): %s %v", command, args)
+		if args[0] == "osd" && args[1] == "crush" && args[2] == "dump" {
+			return testCrushMap, nil
+		}
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+	clusterInfo := AdminClusterInfo("mycluster")
+	clusterSpec := &cephv1.ClusterSpec{}
+	poolSpec := cephv1.PoolSpec{}
+	ruleName := "testrule"
+	if alreadyExists {
+		ruleName = "replicated_ruleset"
+	}
+
+	err := createTwoStepCrushRule(context, clusterInfo, clusterSpec, ruleName, poolSpec)
+	assert.NoError(t, err)
+}
+
+func TestCreatePoolWithReplicasPerFailureDomain(t *testing.T) {
+	// This test goes via the path of explicit compile/decompile CRUSH map; ignored if 'crushtool' is not installed
+	// on local build machine
+	if hasCrushtool() {
+		testCreatePoolWithReplicasPerFailureDomain(t, "host", "mycrushroot", "hdd")
+		testCreatePoolWithReplicasPerFailureDomain(t, "rack", "mycrushroot", "ssd")
+	}
+}
+
+func testCreatePoolWithReplicasPerFailureDomain(t *testing.T, failureDomain, crushRoot, deviceClass string) {
+	poolName := "mypool-with-two-step-clush-rule"
+	poolRuleCreated := false
+	poolRuleSet := false
+	poolAppEnable := false
+	poolSpec := cephv1.PoolSpec{
+		FailureDomain: failureDomain,
+		CrushRoot:     crushRoot,
+		DeviceClass:   deviceClass,
+		Replicated: cephv1.ReplicatedSpec{
+			Size:                     12345678,
+			ReplicasPerFailureDomain: 2,
+		},
+	}
+
+	executor := &exectest.MockExecutor{}
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+		assert.Equal(t, command, "ceph")
+		assert.Equal(t, args[0], "osd")
+		if len(args) >= 3 && args[1] == "crush" && args[2] == "dump" {
+			return testCrushMap, nil
+		}
+		if len(args) >= 3 && args[1] == "pool" && args[2] == "create" {
+			// Currently, CRUSH-rule name equals pool's name
+			assert.GreaterOrEqual(t, len(args), 7)
+			assert.Equal(t, args[3], poolName)
+			assert.Equal(t, args[5], "replicated")
+			crushRuleName := args[6]
+			assert.Equal(t, crushRuleName, poolName)
+			poolRuleCreated = true
+			return "", nil
+		}
+		if len(args) >= 3 && args[1] == "pool" && args[2] == "set" {
+			crushRuleName := args[3]
+			assert.Equal(t, crushRuleName, poolName)
+			assert.Equal(t, args[4], "size")
+			poolSize, err := strconv.Atoi(args[5])
+			assert.NoError(t, err)
+			assert.Equal(t, uint(poolSize), poolSpec.Replicated.Size)
+			poolRuleSet = true
+			return "", nil
+		}
+		if len(args) >= 4 && args[1] == "pool" && args[2] == "application" && args[3] == "enable" {
+			crushRuleName := args[4]
+			assert.Equal(t, crushRuleName, poolName)
+			poolAppEnable = true
+			return "", nil
+		}
+		if len(args) >= 4 && args[1] == "crush" && args[2] == "rule" && args[3] == "create-replicated" {
+			crushRuleName := args[4]
+			assert.Equal(t, crushRuleName, poolName)
+			deviceClassName := args[7]
+			assert.Equal(t, deviceClassName, deviceClass)
+			poolRuleCreated = true
+			return "", nil
+		}
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+	context := &clusterd.Context{Executor: executor}
+	clusterSpec := &cephv1.ClusterSpec{Storage: rookv1.StorageScopeSpec{Config: map[string]string{CrushRootConfigKey: "cluster-crush-root"}}}
+	err := CreateReplicatedPoolForApp(context, AdminClusterInfo("mycluster"), clusterSpec, poolName, poolSpec, DefaultPGCount, "myapp")
+	assert.Nil(t, err)
+	assert.True(t, poolRuleCreated)
+	assert.True(t, poolRuleSet)
+	assert.True(t, poolAppEnable)
+}
+
+func hasCrushtool() bool {
+	_, err := exec.LookPath("crushtool")
+	return err == nil
 }

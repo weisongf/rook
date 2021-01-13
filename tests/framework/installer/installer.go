@@ -18,20 +18,19 @@ package installer
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/coreos/pkg/capnslog"
+	"github.com/rook/rook/tests/framework/utils"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/api/errors"
 )
 
 const (
-	// Version tag for the latest manifests
+	// VersionMaster tag for the latest manifests
 	VersionMaster = "master"
-	// Version tag for Rook v1.0
-	Version1_0 = "v1.0.6"
+
 	// test suite names
 	CassandraTestSuite   = "cassandra"
 	CephTestSuite        = "ceph"
@@ -42,10 +41,6 @@ const (
 )
 
 var (
-	// ** Variables that might need to be changed depending on the dev environment. The init function below will modify some of them automatically. **
-	baseTestDir       string
-	createBaseTestDir = true
-	// ** end of Variables to modify
 	logger              = capnslog.NewPackageLogger("github.com/rook/rook", "installer")
 	createArgs          = []string{"create", "-f"}
 	createFromStdinArgs = append(createArgs, "-")
@@ -59,7 +54,7 @@ type TestSuite interface {
 }
 
 func SkipTestSuite(name string) bool {
-	testsToRun := os.Getenv("STORAGE_PROVIDER_TESTS")
+	testsToRun := testStorageProvider()
 	// jenkins passes "null" if the env var is not set.
 	if testsToRun == "" || testsToRun == "null" {
 		// run all test suites
@@ -74,18 +69,11 @@ func SkipTestSuite(name string) bool {
 	return true
 }
 
-func init() {
-	// If the base test directory is actively set to empty (as in CI), we use the current working directory.
-	baseTestDir = Env.BaseTestDir
-	if baseTestDir == "" {
-		baseTestDir, _ = os.Getwd()
-	}
-	if baseTestDir == "/data" {
-		createBaseTestDir = false
-	}
-}
-
 func SystemNamespace(namespace string) string {
+	if utils.IsPlatformOpenShift() {
+		logger.Infof("For openshift execution used system namespace: %s", namespace)
+		return namespace
+	}
 	return fmt.Sprintf("%s-system", namespace)
 }
 
@@ -95,10 +83,4 @@ func checkError(t *testing.T, err error, message string) {
 		return
 	}
 	assert.NoError(t, err, "%s. %+v", message, err)
-}
-
-func concatYaml(first, second string) string {
-	return first + `
----
-` + second
 }

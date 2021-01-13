@@ -41,9 +41,9 @@ type CephBlockImage struct {
 	InfoName string `json:"name"`
 }
 
-func ListImages(context *clusterd.Context, clusterName, poolName string) ([]CephBlockImage, error) {
+func ListImages(context *clusterd.Context, clusterInfo *ClusterInfo, poolName string) ([]CephBlockImage, error) {
 	args := []string{"ls", "-l", poolName}
-	cmd := NewRBDCommand(context, clusterName, args)
+	cmd := NewRBDCommand(context, clusterInfo, args)
 	cmd.JsonOutput = true
 	buf, err := cmd.Run()
 	if err != nil {
@@ -73,7 +73,7 @@ func ListImages(context *clusterd.Context, clusterName, poolName string) ([]Ceph
 // If size is zero an empty image will be created. Otherwise, an image will be
 // created with a size rounded up to the nearest Mi. The adjusted image size is
 // placed in return value CephBlockImage.Size.
-func CreateImage(context *clusterd.Context, clusterName, name, poolName, dataPoolName string, size uint64) (*CephBlockImage, error) {
+func CreateImage(context *clusterd.Context, clusterInfo *ClusterInfo, name, poolName, dataPoolName string, size uint64) (*CephBlockImage, error) {
 	if size > 0 && size < ImageMinSize {
 		// rbd tool uses MB as the smallest unit for size input.  0 is OK but anything else smaller
 		// than 1 MB should just be rounded up to 1 MB.
@@ -92,11 +92,11 @@ func CreateImage(context *clusterd.Context, clusterName, name, poolName, dataPoo
 	if dataPoolName != "" {
 		args = append(args, fmt.Sprintf("--data-pool=%s", dataPoolName))
 	}
+	logger.Infof("creating rbd image %q with size %dMB in pool %q", imageSpec, sizeMB, dataPoolName)
 
-	buf, err := NewRBDCommand(context, clusterName, args).Run()
+	buf, err := NewRBDCommand(context, clusterInfo, args).Run()
 	if err != nil {
-		cmdErr, ok := err.(*exec.CommandError)
-		if ok && cmdErr.ExitStatus() == int(syscall.EEXIST) {
+		if code, ok := exec.ExitStatus(err); ok && code == int(syscall.EEXIST) {
 			// Image with the same name already exists in the given rbd pool. Continuing with the link to PV.
 			logger.Warningf("Requested image %s exists in pool %s. Continuing", name, poolName)
 		} else {
@@ -116,10 +116,11 @@ func CreateImage(context *clusterd.Context, clusterName, name, poolName, dataPoo
 	return &CephBlockImage{Name: name, Size: newSizeBytes}, nil
 }
 
-func DeleteImage(context *clusterd.Context, clusterName, name, poolName string) error {
+func DeleteImage(context *clusterd.Context, clusterInfo *ClusterInfo, name, poolName string) error {
+	logger.Infof("deleting rbd image %q from pool %q", name, poolName)
 	imageSpec := getImageSpec(name, poolName)
 	args := []string{"rm", imageSpec}
-	buf, err := NewRBDCommand(context, clusterName, args).Run()
+	buf, err := NewRBDCommand(context, clusterInfo, args).Run()
 	if err != nil {
 		return errors.Wrapf(err, "failed to delete image %s in pool %s, output: %s",
 			name, poolName, string(buf))
@@ -128,17 +129,18 @@ func DeleteImage(context *clusterd.Context, clusterName, name, poolName string) 
 	return nil
 }
 
-func ExpandImage(context *clusterd.Context, clusterName, name, poolName, monitors, keyring string, size uint64) error {
+func ExpandImage(context *clusterd.Context, clusterInfo *ClusterInfo, name, poolName, monitors, keyring string, size uint64) error {
+	logger.Infof("expanding rbd image %q in pool %q to size %dMB", name, poolName, display.BToMb(size))
 	imageSpec := getImageSpec(name, poolName)
 	args := []string{
 		"resize",
 		imageSpec,
 		fmt.Sprintf("--size=%s", strconv.FormatUint(size, 10)),
-		fmt.Sprintf("--cluster=%s", clusterName),
+		fmt.Sprintf("--cluster=%s", clusterInfo.Namespace),
 		fmt.Sprintf("--keyring=%s", keyring),
 		"-m", monitors,
 	}
-	output, err := ExecuteRBDCommandWithTimeout(context, clusterName, args)
+	output, err := ExecuteRBDCommandWithTimeout(context, args)
 	if err != nil {
 		return errors.Wrapf(err, "failed to resize image %s in pool %s, output: %s", name, poolName, string(output))
 	}
@@ -146,19 +148,19 @@ func ExpandImage(context *clusterd.Context, clusterName, name, poolName, monitor
 }
 
 // MapImage maps an RBD image using admin cephfx and returns the device path
-func MapImage(context *clusterd.Context, imageName, poolName, id, keyring, clusterName, monitors string) error {
+func MapImage(context *clusterd.Context, clusterInfo *ClusterInfo, imageName, poolName, id, keyring, monitors string) error {
 	imageSpec := getImageSpec(imageName, poolName)
 	args := []string{
 		"map",
 		imageSpec,
 		fmt.Sprintf("--id=%s", id),
-		fmt.Sprintf("--cluster=%s", clusterName),
+		fmt.Sprintf("--cluster=%s", clusterInfo.Namespace),
 		fmt.Sprintf("--keyring=%s", keyring),
 		"-m", monitors,
 		"--conf=/dev/null", // no config file needed because we are passing all required config as arguments
 	}
 
-	output, err := ExecuteRBDCommandWithTimeout(context, clusterName, args)
+	output, err := ExecuteRBDCommandWithTimeout(context, args)
 	if err != nil {
 		return errors.Wrapf(err, "failed to map image %s, output: %s", imageSpec, output)
 	}
@@ -167,13 +169,13 @@ func MapImage(context *clusterd.Context, imageName, poolName, id, keyring, clust
 }
 
 // UnMapImage unmap an RBD image from the node
-func UnMapImage(context *clusterd.Context, imageName, poolName, id, keyring, clusterName, monitors string, force bool) error {
+func UnMapImage(context *clusterd.Context, clusterInfo *ClusterInfo, imageName, poolName, id, keyring, monitors string, force bool) error {
 	deviceImage := getImageSpec(imageName, poolName)
 	args := []string{
 		"unmap",
 		deviceImage,
 		fmt.Sprintf("--id=%s", id),
-		fmt.Sprintf("--cluster=%s", clusterName),
+		fmt.Sprintf("--cluster=%s", clusterInfo.Namespace),
 		fmt.Sprintf("--keyring=%s", keyring),
 		"-m", monitors,
 		"--conf=/dev/null", // no config file needed because we are passing all required config as arguments
@@ -183,7 +185,7 @@ func UnMapImage(context *clusterd.Context, imageName, poolName, id, keyring, clu
 		args = append(args, "-o", "force")
 	}
 
-	output, err := ExecuteRBDCommandWithTimeout(context, clusterName, args)
+	output, err := ExecuteRBDCommandWithTimeout(context, args)
 	if err != nil {
 		return errors.Wrapf(err, "failed to unmap image %s, output: %s", deviceImage, output)
 	}

@@ -5,13 +5,26 @@ scriptdir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 tarname=image.tar
 tarfile="${WORK_DIR}/tests/${tarname}"
 
-export KUBE_VERSION=${KUBE_VERSION:-"v1.13.1"}
+export KUBE_VERSION=${KUBE_VERSION:-"v1.15.12"}
 
 if [[ $KUBE_VERSION != v1.10* && $KUBE_VERSION != v1.11* ]] ; then
     skippreflightcheck=--ignore-preflight-errors=all
 else
     skippreflightcheck=--skip-preflight-checks
 fi
+
+case "$(arch)" in
+        "x86_64" | "amd64")
+            arch="amd64"
+            ;;
+        "aarch64")
+            arch="arm64"
+            ;;
+        *)
+            echo "Couldn't translate 'arch' output to an available arch."
+            exit 1
+            ;;
+esac
 
 usage(){
     echo "usage:" >&2
@@ -99,21 +112,20 @@ wait_for_ready(){
 
 kubeadm_reset() {
     kubectl delete -f "https://cloud.weave.works/k8s/net?k8s-version=$(kubectl version | base64 | tr -d '\n')"
-    sudo kubeadm reset $skippreflightcheck
-    sudo rm /usr/local/bin/kube*
-    sudo rm kubectl
+    sudo kubeadm reset --force $skippreflightcheck
     rm $HOME/admin.conf
     rm -rf $HOME/.kube
     sudo apt-get -y remove kubelet
     sudo apt-get -y remove kubeadm
     sudo swapon -a
+    which systemctl >/dev/null && sudo systemctl start swap.target
 }
 
 case "${1:-}" in
     up)
-        sudo sh -c "${scriptdir}/kubeadm-install.sh ${KUBE_VERSION}" root
+        sudo sh -c "${scriptdir}/kubeadm-install.sh ${KUBE_VERSION}"
         install_master
-        ${scriptdir}/makeTestImages.sh tag amd64 || true
+        ${scriptdir}/makeTestImages.sh tag ${arch} || true
         ;;
     clean)
         kubeadm_reset
@@ -124,7 +136,7 @@ case "${1:-}" in
             usage
             exit 1
         fi
-        sudo sh -c "${scriptdir}/kubeadm-install.sh ${KUBE_VERSION}" root
+        sudo sh -c "${scriptdir}/kubeadm-install.sh ${KUBE_VERSION}"
         case "${2:-}" in
             master)
                 install_master

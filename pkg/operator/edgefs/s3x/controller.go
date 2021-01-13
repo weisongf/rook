@@ -18,17 +18,17 @@ limitations under the License.
 package s3x
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 
 	"github.com/coreos/pkg/capnslog"
 	"github.com/google/go-cmp/cmp"
-	opkit "github.com/rook/operator-kit"
 	edgefsv1 "github.com/rook/rook/pkg/apis/edgefs.rook.io/v1"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
+	"github.com/rook/rook/pkg/operator/k8sutil"
 	v1 "k8s.io/api/core/v1"
-	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
@@ -42,12 +42,11 @@ const (
 var logger = capnslog.NewPackageLogger("github.com/rook/rook", "edgefs-op-s3x")
 
 // S3XResource represents the s3x custom resource
-var S3XResource = opkit.CustomResource{
+var S3XResource = k8sutil.CustomResource{
 	Name:    customResourceName,
 	Plural:  customResourceNamePlural,
 	Group:   edgefsv1.CustomResourceGroup,
 	Version: edgefsv1.Version,
-	Scope:   apiextensionsv1beta1.NamespaceScoped,
 	Kind:    reflect.TypeOf(edgefsv1.S3X{}).Name(),
 }
 
@@ -56,11 +55,10 @@ type S3XController struct {
 	context          *clusterd.Context
 	namespace        string
 	rookImage        string
-	NetworkSpec      rookalpha.NetworkSpec
+	NetworkSpec      rookv1.NetworkSpec
 	dataDirHostPath  string
 	dataVolumeSize   resource.Quantity
-	annotations      rookalpha.Annotations
-	placement        rookalpha.Placement
+	placement        rookv1.Placement
 	resources        v1.ResourceRequirements
 	resourceProfile  string
 	ownerRef         metav1.OwnerReference
@@ -72,10 +70,10 @@ func NewS3XController(
 	context *clusterd.Context,
 	namespace string,
 	rookImage string,
-	NetworkSpec rookalpha.NetworkSpec,
+	NetworkSpec rookv1.NetworkSpec,
 	dataDirHostPath string,
 	dataVolumeSize resource.Quantity,
-	placement rookalpha.Placement,
+	placement rookv1.Placement,
 	resources v1.ResourceRequirements,
 	resourceProfile string,
 	ownerRef metav1.OwnerReference,
@@ -97,7 +95,7 @@ func NewS3XController(
 }
 
 // StartWatch watches for instances of S3X custom resources and acts on them
-func (c *S3XController) StartWatch(stopCh chan struct{}) error {
+func (c *S3XController) StartWatch(stopCh chan struct{}) {
 
 	resourceHandlerFuncs := cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.onAdd,
@@ -106,10 +104,7 @@ func (c *S3XController) StartWatch(stopCh chan struct{}) error {
 	}
 
 	logger.Infof("start watching s3x resources in namespace %s", c.namespace)
-	watcher := opkit.NewWatcher(S3XResource, c.namespace, resourceHandlerFuncs, c.context.RookClientset.EdgefsV1().RESTClient())
-	go watcher.Watch(&edgefsv1.S3X{}, stopCh)
-
-	return nil
+	go k8sutil.WatchCR(S3XResource, c.namespace, resourceHandlerFuncs, c.context.RookClientset.EdgefsV1().RESTClient(), &edgefsv1.S3X{}, stopCh)
 }
 
 func (c *S3XController) onAdd(obj interface{}) {
@@ -168,6 +163,7 @@ func (c *S3XController) serviceOwners(service *edgefsv1.S3X) []metav1.OwnerRefer
 }
 
 func (c *S3XController) ParentClusterChanged(cluster edgefsv1.ClusterSpec) {
+	ctx := context.TODO()
 	if c.rookImage == cluster.EdgefsImageName {
 		logger.Infof("No need to update the s3x service, the same images present")
 		return
@@ -176,7 +172,7 @@ func (c *S3XController) ParentClusterChanged(cluster edgefsv1.ClusterSpec) {
 	// update controller options by updated cluster spec
 	c.rookImage = cluster.EdgefsImageName
 
-	s3xs, err := c.context.RookClientset.EdgefsV1().S3Xs(c.namespace).List(metav1.ListOptions{})
+	s3xs, err := c.context.RookClientset.EdgefsV1().S3Xs(c.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		logger.Errorf("failed to retrieve S3Xs to update the Edgefs version. %+v", err)
 		return

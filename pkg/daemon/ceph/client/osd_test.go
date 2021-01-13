@@ -61,7 +61,7 @@ var (
 func TestHostTree(t *testing.T) {
 	executor := &exectest.MockExecutor{}
 	emptyTreeResult := false
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		switch {
 		case args[0] == "osd" && args[1] == "tree":
@@ -73,14 +73,14 @@ func TestHostTree(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 
-	tree, err := HostTree(&clusterd.Context{Executor: executor}, "rook")
+	tree, err := HostTree(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"))
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(tree.Nodes))
 	assert.Equal(t, "minikube", tree.Nodes[0].Name)
 	assert.Equal(t, 3, len(tree.Nodes[0].Children))
 
 	emptyTreeResult = true
-	tree, err = HostTree(&clusterd.Context{Executor: executor}, "rook")
+	tree, err = HostTree(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"))
 	assert.Error(t, err)
 	assert.Equal(t, 0, len(tree.Nodes))
 
@@ -89,7 +89,7 @@ func TestHostTree(t *testing.T) {
 func TestOsdListNum(t *testing.T) {
 	executor := &exectest.MockExecutor{}
 	emptyOsdListNumResult := false
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		switch {
 		case args[0] == "osd" && args[1] == "ls":
@@ -101,12 +101,12 @@ func TestOsdListNum(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 
-	list, err := OsdListNum(&clusterd.Context{Executor: executor}, "rook")
+	list, err := OsdListNum(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"))
 	assert.NoError(t, err)
 	assert.Equal(t, 3, len(list))
 
 	emptyOsdListNumResult = true
-	list, err = OsdListNum(&clusterd.Context{Executor: executor}, "rook")
+	list, err = OsdListNum(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"))
 	assert.Error(t, err)
 	assert.Equal(t, 0, len(list))
 }

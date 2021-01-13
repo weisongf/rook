@@ -17,7 +17,14 @@ limitations under the License.
 package sidecar
 
 import (
+	"context"
 	"fmt"
+	"net/url"
+	"os"
+	"os/exec"
+	"reflect"
+	"time"
+
 	"github.com/coreos/pkg/capnslog"
 	"github.com/davecgh/go-spew/spew"
 	cassandrav1alpha1 "github.com/rook/rook/pkg/apis/cassandra.rook.io/v1alpha1"
@@ -34,11 +41,6 @@ import (
 	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
-	"net/url"
-	"os"
-	"os/exec"
-	"reflect"
-	"time"
 )
 
 // MemberController encapsulates all the tools the sidecar needs to
@@ -67,14 +69,13 @@ func New(
 	rookClient rookClientset.Interface,
 	serviceInformer coreinformers.ServiceInformer,
 ) (*MemberController, error) {
-
+	ctx := context.TODO()
 	logger := capnslog.NewPackageLogger("github.com/rook/rook", "sidecar")
-
 	// Get the member's service
 	var memberService *corev1.Service
 	var err error
 	for {
-		memberService, err = kubeClient.CoreV1().Services(namespace).Get(name, metav1.GetOptions{})
+		memberService, err = kubeClient.CoreV1().Services(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			logger.Infof("Something went wrong trying to get Member Service %s", name)
 
@@ -86,7 +87,7 @@ func New(
 	}
 
 	// Get the Member's metadata from the Pod's labels
-	pod, err := kubeClient.CoreV1().Pods(namespace).Get(name, metav1.GetOptions{})
+	pod, err := kubeClient.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +100,7 @@ func New(
 	nodetool := nodetool.NewFromURL(url)
 
 	// Get the member's cluster
-	cluster, err := rookClient.CassandraV1alpha1().Clusters(namespace).Get(pod.Labels[constants.ClusterNameLabel], metav1.GetOptions{})
+	cluster, err := rookClient.CassandraV1alpha1().Clusters(namespace).Get(ctx, pod.Labels[constants.ClusterNameLabel], metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +124,10 @@ func New(
 
 	serviceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			svc := obj.(*corev1.Service)
+			svc, ok := obj.(*corev1.Service)
+			if !ok {
+				return
+			}
 			if svc.Name != m.name {
 				logger.Errorf("Lister returned unexpected service %s", svc.Name)
 				return
@@ -131,8 +135,14 @@ func New(
 			m.enqueueMemberService(svc)
 		},
 		UpdateFunc: func(old, new interface{}) {
-			oldService := old.(*corev1.Service)
-			newService := new.(*corev1.Service)
+			oldService, ok := old.(*corev1.Service)
+			if !ok {
+				return
+			}
+			newService, ok := new.(*corev1.Service)
+			if !ok {
+				return
+			}
 			if oldService.ResourceVersion == newService.ResourceVersion {
 				return
 			}
@@ -143,7 +153,10 @@ func New(
 			m.enqueueMemberService(newService)
 		},
 		DeleteFunc: func(obj interface{}) {
-			svc := obj.(*corev1.Service)
+			svc, ok := obj.(*corev1.Service)
+			if !ok {
+				return
+			}
 			if svc.Name == m.name {
 				logger.Errorf("Unexpected deletion of MemberService %s", svc.Name)
 			}

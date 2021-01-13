@@ -30,10 +30,8 @@ write_endpoints() {
     endpoints=$(cat ${MON_CONFIG})
 
     # filter out the mon names
-    mon_endpoints=$(echo ${endpoints} | sed 's/[a-z]\+=//g')
-
-    # filter out the legacy mon names
-    mon_endpoints=$(echo ${mon_endpoints} | sed 's/rook-ceph-mon[0-9]\+=//g')
+    # external cluster can have numbers or hyphens in mon names, handling them in regex
+    mon_endpoints=$(echo ${endpoints} | sed 's/[a-z0-9_-]\+=//g')
 
     DATE=$(date)
     echo "$DATE writing mon endpoints to ${CEPH_CONFIG}: ${endpoints}"
@@ -65,12 +63,14 @@ watch_endpoints() {
 
 # create the keyring file
 cat <<EOF > ${KEYRING_FILE}
-[client.admin]
-key = ${ROOK_ADMIN_SECRET}
+[${ROOK_CEPH_USERNAME}]
+key = ${ROOK_CEPH_SECRET}
 EOF
 
 # write the initial config file
 write_endpoints
 
 # continuously update the mon endpoints if they fail over
-watch_endpoints
+if [ "$1" != "--skip-watch" ]; then
+  watch_endpoints
+fi

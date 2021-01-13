@@ -4,7 +4,7 @@ metadata:
   name: csi-cephfsplugin-provisioner
   namespace: {{ .Namespace }}
 spec:
-  replicas: 2
+  replicas: {{ .ProvisionerReplicas }}
   selector:
     matchLabels:
      app: csi-cephfsplugin-provisioner
@@ -13,22 +13,73 @@ spec:
       labels:
         app: csi-cephfsplugin-provisioner
         contains: csi-cephfsplugin-metrics
+        {{ range $key, $value := .CSICephFSPodLabels }}
+        {{ $key }}: "{{ $value }}"
+        {{ end }}
     spec:
       serviceAccount: rook-csi-cephfs-provisioner-sa
+      {{ if .ProvisionerPriorityClassName }}
+      priorityClassName: {{ .ProvisionerPriorityClassName }}
+      {{ end }}
       containers:
         - name: csi-attacher
           image: {{ .AttacherImage }}
           args:
-            - "--v=5"
+            - "--v={{ .LogLevel }}"
             - "--csi-address=$(ADDRESS)"
             - "--leader-election=true"
             - "--timeout=150s"
-            - "--leader-election-type=leases"
             - "--leader-election-namespace={{ .Namespace }}"
           env:
             - name: ADDRESS
               value: /csi/csi-provisioner.sock
           imagePullPolicy: "IfNotPresent"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-snapshotter
+          image:  {{ .SnapshotterImage }}
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v={{ .LogLevel }}"
+            - "--timeout=150s"
+            - "--leader-election=true"
+            - "--leader-election-namespace={{ .Namespace }}"
+          env:
+            - name: ADDRESS
+              value: unix:///csi/csi-provisioner.sock
+          imagePullPolicy: "IfNotPresent"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-resizer
+          image: {{ .ResizerImage }}
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--v={{ .LogLevel }}"
+            - "--timeout=150s"
+            - "--leader-election"
+            - "--leader-election-namespace={{ .Namespace }}"
+            - "--handle-volume-inuse-error=false"
+          env:
+            - name: ADDRESS
+              value: unix:///csi/csi-provisioner.sock
+          imagePullPolicy: "IfNotPresent"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -36,33 +87,32 @@ spec:
           image: {{ .ProvisionerImage }}
           args:
             - "--csi-address=$(ADDRESS)"
-            - "--v=5"
+            - "--v={{ .LogLevel }}"
             - "--timeout=150s"
             - "--retry-interval-start=500ms"
-            - "--enable-leader-election=true"
-            - "--leader-election-type=leases"
+            - "--leader-election=true"
             - "--leader-election-namespace={{ .Namespace }}"
           env:
             - name: ADDRESS
               value: unix:///csi/csi-provisioner.sock
           imagePullPolicy: "IfNotPresent"
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /csi
-        - name: csi-cephfsplugin
           securityContext:
             privileged: true
             capabilities:
               add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-cephfsplugin
           image: {{ .CSIPluginImage }}
           args:
             - "--nodeid=$(NODE_ID)"
             - "--type=cephfs"
             - "--endpoint=$(CSI_ENDPOINT)"
-            - "--v=5"
+            - "--v={{ .LogLevel }}"
             - "--controllerserver=true"
             - "--drivername={{ .DriverNamePrefix }}cephfs.csi.ceph.com"
-            - "--metadatastorage=k8s_configmap"
             - "--pidlimit=-1"
             - "--metricsport={{ .CephFSGRPCMetricsPort }}"
             - "--forcecephkernelclient={{ .ForceCephFSKernelClient }}"
@@ -84,6 +134,11 @@ spec:
             - name: CSI_ENDPOINT
               value: unix:///csi/csi-provisioner.sock
           imagePullPolicy: "IfNotPresent"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
           volumeMounts:
             - name: socket-dir
               mountPath: /csi
@@ -118,11 +173,16 @@ spec:
             - name: socket-dir
               mountPath: /csi
           imagePullPolicy: "IfNotPresent"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["SYS_ADMIN"]
+            allowPrivilegeEscalation: true
       volumes:
         - name: socket-dir
-          hostPath:
-            path: "{{ .KubeletDirPath }}/plugins/{{ .DriverNamePrefix }}cephfs.csi.ceph.com"
-            type: DirectoryOrCreate
+          emptyDir: {
+            medium: "Memory"
+          }
         - name: host-sys
           hostPath:
             path: /sys

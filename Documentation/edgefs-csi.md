@@ -7,6 +7,8 @@ indent: true
 
 # EdgeFS Rook integrated CSI driver, provisioner, attacher and snapshotter
 
+[Deprecated](https://github.com/rook/rook/issues/5823#issuecomment-703834989)
+
 [Container Storage Interface (CSI)](https://github.com/container-storage-interface/) driver, provisioner, attacher and snapshotter for EdgeFS Scale-Out NFS/ISCSI services
 
 ## Overview
@@ -107,7 +109,7 @@ Check configuration options and create kubernetes secret for Edgefs CSI NFS plug
 
 ```console
 git clone --single-branch --branch {{ branchName }} https://github.com/rook/rook.git
-cd cluster/examples/kubernetes/edgefs/csi/nfs
+cd rook/cluster/examples/kubernetes/edgefs/csi/nfs
 kubectl create secret generic edgefs-nfs-csi-driver-config --from-file=./edgefs-nfs-csi-driver-config.yaml
 ```
 

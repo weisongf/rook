@@ -29,7 +29,8 @@ import (
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	cephClient "github.com/rook/rook/pkg/daemon/ceph/client"
-	cephCluster "github.com/rook/rook/pkg/operator/ceph/cluster"
+
+	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
 	"github.com/rook/rook/pkg/operator/ceph/disruption/controllerconfig"
 	"github.com/rook/rook/pkg/operator/ceph/disruption/machinelabel"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -105,7 +106,7 @@ func (r *MachineDisruptionReconciler) reconcile(request reconcile.Request) (reco
 					MDBCephClusterNamespaceLabelKey: request.Namespace,
 					MDBCephClusterNameLabelKey:      request.Name,
 				},
-				OwnerReferences: []metav1.OwnerReference{cephCluster.ClusterOwnerRef(cephClusterInstance.GetName(), string(cephClusterInstance.GetUID()))},
+				OwnerReferences: []metav1.OwnerReference{opcontroller.ClusterOwnerRef(cephClusterInstance.GetName(), string(cephClusterInstance.GetUID()))},
 			},
 			Spec: healthchecking.MachineDisruptionBudgetSpec{
 				MaxUnavailable: &maxUnavailable,
@@ -130,7 +131,8 @@ func (r *MachineDisruptionReconciler) reconcile(request reconcile.Request) (reco
 		mdb.Spec.MaxUnavailable = &maxUnavailable
 	}
 	// Check if the cluster is clean or not
-	_, isClean, err := cephClient.IsClusterClean(r.context.ClusterdContext, request.Namespace)
+	clusterInfo := cephClient.AdminClusterInfo(request.NamespacedName.Namespace)
+	_, isClean, err := cephClient.IsClusterClean(r.context.ClusterdContext, clusterInfo)
 	if err != nil {
 		maxUnavailable := int32(0)
 		mdb.Spec.MaxUnavailable = &maxUnavailable

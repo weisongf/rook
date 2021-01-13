@@ -20,21 +20,20 @@ Portions of this file came from https://github.com/cockroachdb/cockroach, which 
 package cockroachdb
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
 
-	opkit "github.com/rook/operator-kit"
 	cockroachdbv1alpha1 "github.com/rook/rook/pkg/apis/cockroachdb.rook.io/v1alpha1"
-	rookv1alpha2 "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
-	apiextensionsv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -49,8 +48,6 @@ const (
 	appName                        = "rook-cockroachdb"
 	createInitRetryIntervalDefault = 6 * time.Second
 	createInitTimeout              = 5 * time.Minute
-	updateClusterInterval          = 30 * time.Second
-	updateClusterTimeout           = 1 * time.Hour
 	httpPortDefault                = int32(8080)
 	httpPortName                   = "http"
 	grpcPortDefault                = int32(26257)
@@ -61,12 +58,11 @@ const (
 	envVarValChannelInsecure       = "kubernetes-insecure"
 )
 
-var ClusterResource = opkit.CustomResource{
+var ClusterResource = k8sutil.CustomResource{
 	Name:    CustomResourceName,
 	Plural:  CustomResourceNamePlural,
 	Group:   cockroachdbv1alpha1.CustomResourceGroup,
 	Version: cockroachdbv1alpha1.Version,
-	Scope:   apiextensionsv1beta1.NamespaceScoped,
 	Kind:    reflect.TypeOf(cockroachdbv1alpha1.Cluster{}).Name(),
 }
 
@@ -88,7 +84,7 @@ type cluster struct {
 	context     *clusterd.Context
 	namespace   string
 	spec        cockroachdbv1alpha1.ClusterSpec
-	annotations rookv1alpha2.Annotations
+	annotations rookv1.Annotations
 	ownerRef    metav1.OwnerReference
 }
 
@@ -113,7 +109,7 @@ func clusterOwnerRef(name, clusterID string) metav1.OwnerReference {
 	}
 }
 
-func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) error {
+func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) {
 	resourceHandlerFuncs := cache.ResourceEventHandlerFuncs{
 		AddFunc:    c.onAdd,
 		UpdateFunc: c.onUpdate,
@@ -121,14 +117,16 @@ func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) e
 	}
 
 	logger.Infof("start watching cockroachdb clusters in all namespaces")
-	watcher := opkit.NewWatcher(ClusterResource, namespace, resourceHandlerFuncs, c.context.RookClientset.CockroachdbV1alpha1().RESTClient())
-	go watcher.Watch(&cockroachdbv1alpha1.Cluster{}, stopCh)
+	go k8sutil.WatchCR(ClusterResource, namespace, resourceHandlerFuncs, c.context.RookClientset.CockroachdbV1alpha1().RESTClient(), &cockroachdbv1alpha1.Cluster{}, stopCh)
 
-	return nil
 }
 
 func (c *ClusterController) onAdd(obj interface{}) {
-	clusterObj := obj.(*cockroachdbv1alpha1.Cluster).DeepCopy()
+	clusterObj, ok := obj.(*cockroachdbv1alpha1.Cluster)
+	if !ok {
+		return
+	}
+	clusterObj = clusterObj.DeepCopy()
 	logger.Infof("new cluster %s added to namespace %s", clusterObj.Name, clusterObj.Namespace)
 
 	cluster := newCluster(clusterObj, c.context)
@@ -181,8 +179,16 @@ func (c *ClusterController) onAdd(obj interface{}) {
 }
 
 func (c *ClusterController) onUpdate(oldObj, newObj interface{}) {
-	_ = oldObj.(*cockroachdbv1alpha1.Cluster).DeepCopy()
-	newCluster := newObj.(*cockroachdbv1alpha1.Cluster).DeepCopy()
+	oldCluster, ok := oldObj.(*cockroachdbv1alpha1.Cluster)
+	if !ok {
+		return
+	}
+	_ = oldCluster.DeepCopy()
+	newCluster, ok := newObj.(*cockroachdbv1alpha1.Cluster)
+	if !ok {
+		return
+	}
+	newCluster = newCluster.DeepCopy()
 	logger.Infof("cluster %s updated in namespace %s", newCluster.Name, newCluster.Namespace)
 }
 
@@ -196,6 +202,7 @@ func (c *ClusterController) onDelete(obj interface{}) {
 }
 
 func (c *ClusterController) createClientService(cluster *cluster) error {
+	ctx := context.TODO()
 	httpPort, grpcPort, err := getPortsFromSpec(cluster.spec.Network)
 	if err != nil {
 		return err
@@ -217,7 +224,7 @@ func (c *ClusterController) createClientService(cluster *cluster) error {
 	}
 	k8sutil.SetOwnerRef(&clientService.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(clientService); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(ctx, clientService, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -230,6 +237,7 @@ func (c *ClusterController) createClientService(cluster *cluster) error {
 }
 
 func (c *ClusterController) createReplicaService(cluster *cluster) error {
+	ctx := context.TODO()
 	httpPort, grpcPort, err := getPortsFromSpec(cluster.spec.Network)
 	if err != nil {
 		return err
@@ -267,7 +275,7 @@ func (c *ClusterController) createReplicaService(cluster *cluster) error {
 	}
 	k8sutil.SetOwnerRef(&replicaService.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(replicaService); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(ctx, replicaService, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -280,6 +288,7 @@ func (c *ClusterController) createReplicaService(cluster *cluster) error {
 }
 
 func (c *ClusterController) createPodDisruptionBudget(cluster *cluster) error {
+	ctx := context.TODO()
 	maxUnavailable := intstr.FromInt(int(1))
 
 	pdb := &policyv1beta1.PodDisruptionBudget{
@@ -297,7 +306,7 @@ func (c *ClusterController) createPodDisruptionBudget(cluster *cluster) error {
 	}
 	k8sutil.SetOwnerRef(&pdb.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.PolicyV1beta1().PodDisruptionBudgets(cluster.namespace).Create(pdb); err != nil {
+	if _, err := c.context.Clientset.PolicyV1beta1().PodDisruptionBudgets(cluster.namespace).Create(ctx, pdb, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -310,6 +319,7 @@ func (c *ClusterController) createPodDisruptionBudget(cluster *cluster) error {
 }
 
 func (c *ClusterController) createStatefulSet(cluster *cluster) error {
+	ctx := context.TODO()
 	replicas := int32(cluster.spec.Storage.NodeCount)
 
 	httpPort, grpcPort, err := getPortsFromSpec(cluster.spec.Network)
@@ -346,7 +356,7 @@ func (c *ClusterController) createStatefulSet(cluster *cluster) error {
 	cluster.annotations.ApplyToObjectMeta(&statefulSet.ObjectMeta)
 	k8sutil.SetOwnerRef(&statefulSet.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.AppsV1().StatefulSets(cluster.namespace).Create(statefulSet); err != nil {
+	if _, err := c.context.Clientset.AppsV1().StatefulSets(cluster.namespace).Create(ctx, statefulSet, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -469,8 +479,9 @@ func createContainer(cluster *cluster, containerImage string, httpPort, grpcPort
 }
 
 func (c *ClusterController) isPodsRunning(cluster *cluster) error {
+	ctx := context.TODO()
 	listOpts := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", k8sutil.AppAttr, appName)}
-	pods, err := c.context.Clientset.CoreV1().Pods(cluster.namespace).List(listOpts)
+	pods, err := c.context.Clientset.CoreV1().Pods(cluster.namespace).List(ctx, listOpts)
 	if err != nil {
 		return fmt.Errorf("failed to list pods for %s: %+v", listOpts.LabelSelector, err)
 	}
@@ -491,8 +502,7 @@ func (c *ClusterController) initCluster(cluster *cluster) error {
 	}
 
 	hostFlag := fmt.Sprintf("--host=%s", createQualifiedReplicaServiceName(0, cluster.namespace))
-	out, err := c.context.Executor.ExecuteCommandWithCombinedOutput(false, "cockroachdb init",
-		"/cockroach/cockroach", "init", "--insecure", hostFlag)
+	out, err := c.context.Executor.ExecuteCommandWithCombinedOutput("/cockroach/cockroach", "init", "--insecure", hostFlag)
 	if err != nil {
 		return fmt.Errorf("cluster init failed for namespace %s: %+v. %s", cluster.namespace, err, out)
 	}

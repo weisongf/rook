@@ -46,7 +46,7 @@ spec:
   dataPools:
     - replicated:
         size: 3
-  preservePoolsOnDelete: true
+  preserveFilesystemOnDelete: true
   metadataServer:
     activeCount: 1
     activeStandby: true
@@ -87,7 +87,7 @@ Save this storage class definition as `storageclass.yaml`:
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: csi-cephfs
+  name: rook-cephfs
 # Change "rook-ceph" provisioner prefix to match the operator namespace if needed
 provisioner: rook-ceph.cephfs.csi.ceph.com
 parameters:
@@ -109,6 +109,8 @@ parameters:
   # in the same namespace as the cluster.
   csi.storage.k8s.io/provisioner-secret-name: rook-csi-cephfs-provisioner
   csi.storage.k8s.io/provisioner-secret-namespace: rook-ceph
+  csi.storage.k8s.io/controller-expand-secret-name: rook-csi-cephfs-provisioner
+  csi.storage.k8s.io/controller-expand-secret-namespace: rook-ceph
   csi.storage.k8s.io/node-stage-secret-name: rook-csi-cephfs-node
   csi.storage.k8s.io/node-stage-secret-namespace: rook-ceph
 
@@ -147,13 +149,14 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: cephfs-pvc
+  namespace: kube-system
 spec:
   accessModes:
   - ReadWriteMany
   resources:
     requests:
       storage: 1Gi
-  storageClassName: csi-cephfs
+  storageClassName: rook-cephfs
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -238,13 +241,13 @@ kubectl delete -f kube-registry.yaml
 
 To delete the filesystem components and backing data, delete the Filesystem CRD.
 
-> **WARNING: Data will be deleted if preservePoolsOnDelete=false**.
+> **WARNING: Data will be deleted if preserveFilesystemOnDelete=false**.
 
 ```console
 kubectl -n rook-ceph delete cephfilesystem myfs
 ```
 
-Note: If the "preservePoolsOnDelete" filesystem attribute is set to true, the above command won't delete the pools. Creating again the filesystem with the same CRD will reuse again the previous pools.
+Note: If the "preserveFilesystemOnDelete" filesystem attribute is set to true, the above command won't delete the filesystem. Recreating the same CRD will reuse the existing filesystem.
 
 ## Flex Driver
 

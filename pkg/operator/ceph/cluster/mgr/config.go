@@ -17,11 +17,11 @@ limitations under the License.
 package mgr
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/rook/rook/pkg/operator/ceph/config"
 	"github.com/rook/rook/pkg/operator/ceph/config/keyring"
-	apps "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -30,7 +30,7 @@ const (
 	keyringTemplate = `
 [mgr.%s]
 	key = %s
-	caps mon = "allow *"
+	caps mon = "allow profile mgr"
 	caps mds = "allow *"
 	caps osd = "allow *"
 `
@@ -44,23 +44,23 @@ type mgrConfig struct {
 }
 
 func (c *Cluster) dashboardPort() int {
-	if c.dashboard.Port == 0 {
+	if c.spec.Dashboard.Port == 0 {
 		// default port for HTTP/HTTPS
-		if c.dashboard.SSL {
+		if c.spec.Dashboard.SSL {
 			return dashboardPortHTTPS
 		} else {
 			return dashboardPortHTTP
 		}
 	}
 	// crd validates port >= 0
-	return c.dashboard.Port
+	return c.spec.Dashboard.Port
 }
 
 func (c *Cluster) generateKeyring(m *mgrConfig) (string, error) {
+	ctx := context.TODO()
 	user := fmt.Sprintf("mgr.%s", m.DaemonID)
-	/* TODO: the access string here does not match the access from the keyring template. should they match? */
-	access := []string{"mon", "allow *", "mds", "allow *", "osd", "allow *"}
-	s := keyring.GetSecretStore(c.context, c.Namespace, &c.ownerRef)
+	access := []string{"mon", "allow profile mgr", "mds", "allow *", "osd", "allow *"}
+	s := keyring.GetSecretStore(c.context, c.clusterInfo, &c.clusterInfo.OwnerRef)
 
 	key, err := s.GenerateKey(user, access)
 	if err != nil {
@@ -68,7 +68,7 @@ func (c *Cluster) generateKeyring(m *mgrConfig) (string, error) {
 	}
 
 	// Delete legacy key store for upgrade from Rook v0.9.x to v1.0.x
-	err = c.context.Clientset.CoreV1().Secrets(c.Namespace).Delete(m.ResourceName, &metav1.DeleteOptions{})
+	err = c.context.Clientset.CoreV1().Secrets(c.clusterInfo.Namespace).Delete(ctx, m.ResourceName, metav1.DeleteOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
 			logger.Debugf("legacy mgr key %q is already removed", m.ResourceName)
@@ -79,9 +79,4 @@ func (c *Cluster) generateKeyring(m *mgrConfig) (string, error) {
 
 	keyring := fmt.Sprintf(keyringTemplate, m.DaemonID, key)
 	return keyring, s.CreateOrUpdate(m.ResourceName, keyring)
-}
-
-func (c *Cluster) associateKeyring(existingKeyring string, d *apps.Deployment) error {
-	s := keyring.GetSecretStoreForDeployment(c.context, d)
-	return s.CreateOrUpdate(d.GetName(), existingKeyring)
 }

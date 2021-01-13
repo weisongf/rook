@@ -8,7 +8,7 @@ apiVersion: ceph.rook.io/v1
 kind: CephFilesystem
 metadata:
   name: myfs-ec
-  namespace: rook-ceph
+  namespace: rook-ceph # namespace:cluster
 spec:
   # The metadata pool spec
   metadataPool:
@@ -21,8 +21,11 @@ spec:
     - erasureCoded:
         dataChunks: 2
         codingChunks: 1
-  # Whether to preserve metadata and data pools on filesystem deletion
-  preservePoolsOnDelete: true
+      # Inline compression mode for the data pool
+      parameters:
+        compression_mode: none
+  # Whether to preserve filesystem after CephFilesystem CRD deletion
+  preserveFilesystemOnDelete: true
   # The metadata service (mds) configuration
   metadataServer:
     # The number of active MDS instances
@@ -40,6 +43,7 @@ spec:
     #          operator: In
     #          values:
     #          - mds-node
+    #  topologySpreadConstraints:
     #  tolerations:
     #  - key: mds-node
     #    operator: Exists
@@ -52,11 +56,26 @@ spec:
                 operator: In
                 values:
                 - rook-ceph-mds
-            # topologyKey: failure-domain.beta.kubernetes.io/zone can be used to spread MDS across different AZ
             # topologyKey: kubernetes.io/hostname will place MDS across different hosts
             topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                    - rook-ceph-mds
+                # topologyKey: */zone can be used to spread MDS across different AZ
+                # Use <topologyKey: failure-domain.beta.kubernetes.io/zone> in k8s cluster if your cluster is v1.16 or lower
+                # Use <topologyKey: topology.kubernetes.io/zone>  in k8s cluster is v1.17 or upper
+                topologyKey: topology.kubernetes.io/zone
     # A key/value list of annotations
     annotations:
+    #  key: value
+    # A key/value list of labels
+    labels:
     #  key: value
     resources:
     # The requests and limits set here, allow the filesystem MDS Pod(s) to use half of one CPU core and 1 gigabyte of memory

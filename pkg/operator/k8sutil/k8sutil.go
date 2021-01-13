@@ -18,19 +18,23 @@ limitations under the License.
 package k8sutil
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/coreos/pkg/capnslog"
+	"github.com/rook/rook/pkg/clusterd"
 	rookversion "github.com/rook/rook/pkg/version"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 )
 
 var logger = capnslog.NewPackageLogger("github.com/rook/rook", "op-k8sutil")
@@ -75,9 +79,12 @@ func GetK8SVersion(clientset kubernetes.Interface) (*version.Version, error) {
 	return version.MustParseSemantic(serverVersion.GitVersion), nil
 }
 
-// Hash MD5 hash a given string
+// Hash stableName computes a stable pseudorandom string suitable for inclusion in a Kubernetes object name from the given seed string.
+// Do **NOT** edit this function in a way that would change its output as it needs to
+// provide consistent mappings from string to hash across versions of rook.
 func Hash(s string) string {
-	return fmt.Sprintf("%x", md5.Sum([]byte(s)))
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:16])
 }
 
 // TruncateNodeName hashes the nodeName in case it would case the name to be longer than 63 characters
@@ -86,6 +93,8 @@ func Hash(s string) string {
 // For more information, see the following resources:
 // https://stackoverflow.com/a/50451893
 // https://stackoverflow.com/a/32294443
+// Do **NOT** edit this function in a way that would change its output as it needs to
+// provide consistent mappings from string to hash across versions of rook.
 func TruncateNodeName(format, nodeName string) string {
 	if len(nodeName)+len(fmt.Sprintf(format, "")) > validation.DNS1035LabelMaxLength {
 		hashed := Hash(nodeName)
@@ -117,7 +126,7 @@ func deleteResourceAndWait(namespace, name, resourceType string,
 
 	// wait for the resource to be deleted
 	sleepTime := 2 * time.Second
-	for i := 0; i < 30; i++ {
+	for i := 0; i < 45; i++ {
 		// check for the existence of the resource
 		err = getAction()
 		if err != nil {
@@ -128,7 +137,10 @@ func deleteResourceAndWait(namespace, name, resourceType string,
 			return fmt.Errorf("failed to get %s. %+v", name, err)
 		}
 
-		logger.Infof("%s still found. waiting...", name)
+		if i%5 == 0 {
+			// occasionally print a message
+			logger.Infof("%q still found. waiting...", name)
+		}
 		time.Sleep(sleepTime)
 	}
 
@@ -136,7 +148,7 @@ func deleteResourceAndWait(namespace, name, resourceType string,
 }
 
 // Add the rook version to the labels. This should *not* be used on pod specifications, because this
-// will result in the deployment/daemonset/ect. recreating all of its pods even if an update
+// will result in the deployment/daemonset/etc. recreating all of its pods even if an update
 // wouldn't otherwise be required. Upgrading unnecessarily increases risk for loss of data
 // reliability, even if only briefly.
 //
@@ -165,4 +177,20 @@ func validateLabelValue(value string) string {
 		sanitized = sanitized[:maxlen]
 	}
 	return sanitized
+}
+
+// StartOperatorSettingsWatch starts the watch for Operator Settings ConfigMap
+func StartOperatorSettingsWatch(context *clusterd.Context, operatorNamespace, operatorSettingConfigMapName string,
+	addFunc func(obj interface{}), updateFunc func(oldObj, newObj interface{}), deleteFunc func(obj interface{}), stopCh chan struct{}) {
+	_, cacheController := cache.NewInformer(cache.NewFilteredListWatchFromClient(context.Clientset.CoreV1().RESTClient(),
+		"configmaps", operatorNamespace, func(options *metav1.ListOptions) {
+			options.FieldSelector = fmt.Sprintf("%s=%s", "metadata.name", operatorSettingConfigMapName)
+		}), &v1.ConfigMap{},
+		0,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc:    addFunc,
+			UpdateFunc: updateFunc,
+			DeleteFunc: deleteFunc,
+		})
+	go cacheController.Run(stopCh)
 }

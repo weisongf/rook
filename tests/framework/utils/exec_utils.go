@@ -20,12 +20,11 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	"log"
 	"os/exec"
 	"strings"
-	"syscall"
 
 	"github.com/coreos/pkg/capnslog"
+	utilexec "github.com/rook/rook/pkg/util/exec"
 )
 
 var logger = capnslog.NewPackageLogger("github.com/rook/rook", "testutil")
@@ -33,9 +32,7 @@ var logger = capnslog.NewPackageLogger("github.com/rook/rook", "testutil")
 // CommandArgs is a warpper for cmd args
 type CommandArgs struct {
 	Command             string
-	SubCommand          string
 	CmdArgs             []string
-	OptionalArgs        []string
 	PipeToStdIn         string
 	EnvironmentVariable []string
 }
@@ -54,7 +51,7 @@ func ExecuteCommand(cmdStruct CommandArgs) CommandOut {
 
 	var outBuffer, errBuffer bytes.Buffer
 
-	cmd := exec.Command(cmdStruct.Command, cmdStruct.CmdArgs...)
+	cmd := exec.Command(cmdStruct.Command, cmdStruct.CmdArgs...) //nolint:gosec // We safely suppress gosec in tests file
 
 	cmd.Env = append(cmd.Env, cmdStruct.EnvironmentVariable...)
 
@@ -107,21 +104,21 @@ func ExecuteCommand(cmdStruct CommandArgs) CommandOut {
 	}
 
 	if cmdStruct.PipeToStdIn != "" {
-		stdin.Write([]byte(cmdStruct.PipeToStdIn))
+		_, err = stdin.Write([]byte(cmdStruct.PipeToStdIn))
+		if err != nil {
+			return CommandOut{StdErr: errBuffer.String(), StdOut: outBuffer.String(), Err: err}
+		}
 		stdin.Close()
 	}
 
-	if err := cmd.Wait(); err != nil {
-		if exiterr, ok := err.(*exec.ExitError); ok {
-			// The program has exited with an exit code != 0
-			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
-				log.Printf("Exit Status: %d", status.ExitStatus())
-				return CommandOut{StdErr: errBuffer.String(), StdOut: outBuffer.String(), ExitCode: status.ExitStatus(), Err: exiterr}
-			}
-		} else {
-			return CommandOut{StdErr: errBuffer.String(), StdOut: outBuffer.String(), Err: nil}
+	err = cmd.Wait()
+	out := CommandOut{StdErr: errBuffer.String(), StdOut: outBuffer.String()}
+	if err != nil {
+		out.Err = err
+		if code, ok := utilexec.ExitStatus(err); ok {
+			out.ExitCode = code
 		}
 	}
 
-	return CommandOut{StdErr: errBuffer.String(), StdOut: outBuffer.String(), Err: err}
+	return out
 }

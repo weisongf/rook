@@ -1,6 +1,6 @@
 ---
 title: OpenShift
-weight: 1700
+weight: 2060
 indent: true
 ---
 {% assign url = page.url | split: '/' %}
@@ -25,7 +25,7 @@ The settings for Rook in OpenShift are described below, and are also included in
 To create an OpenShift cluster, the commands basically include:
 
 ```console
-oc create -f common.yaml
+oc create -f crds.yaml -f common.yaml
 oc create -f operator-openshift.yaml
 oc create -f cluster.yaml
 ```
@@ -144,7 +144,3 @@ A sample object store can be created with these settings:
 ```console
 oc create -f object-openshift.yaml
 ```
-
-## MiniShift
-
-There is a known issue in MiniShift that does not allow Rook to be tested in some common end-to-end scenarios. Flex drivers are not currently supported, which means that block and file volumes cannot be mounted. See this [tracking issue](https://github.com/minishift/minishift/issues/2387).

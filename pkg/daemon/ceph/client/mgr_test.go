@@ -21,6 +21,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/rook/rook/pkg/clusterd"
+	"github.com/rook/rook/pkg/operator/ceph/version"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
 	"github.com/stretchr/testify/assert"
 )
@@ -29,9 +30,12 @@ func TestEnableModuleRetries(t *testing.T) {
 	moduleEnableRetries := 0
 	moduleEnableWaitTime = 0
 	executor := &exectest.MockExecutor{}
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		switch {
+		case args[0] == "balancer" && args[1] == "on":
+			return "", nil
+
 		case args[0] == "mgr" && args[1] == "module" && args[2] == "enable":
 			if args[3] == "prometheus" || args[3] == "pg_autoscaler" || args[3] == "crash" {
 				return "", nil
@@ -48,18 +52,29 @@ func TestEnableModuleRetries(t *testing.T) {
 
 	}
 
-	_ = MgrEnableModule(&clusterd.Context{Executor: executor}, "clusterName", "invalidModuleName", false)
+	clusterInfo := AdminClusterInfo("mycluster")
+	_ = MgrEnableModule(&clusterd.Context{Executor: executor}, clusterInfo, "invalidModuleName", false)
 	assert.Equal(t, 5, moduleEnableRetries)
 
 	moduleEnableRetries = 0
-	_ = MgrEnableModule(&clusterd.Context{Executor: executor}, "clusterName", "pg_autoscaler", false)
+	_ = MgrEnableModule(&clusterd.Context{Executor: executor}, clusterInfo, "pg_autoscaler", false)
+	assert.Equal(t, 0, moduleEnableRetries)
+
+	// Balancer not on Ceph Pacific
+	moduleEnableRetries = 0
+	_ = MgrEnableModule(&clusterd.Context{Executor: executor}, clusterInfo, "balancer", false)
+	assert.Equal(t, 0, moduleEnableRetries)
+
+	// Balancer skipped on Pacific
+	clusterInfo.CephVersion = version.Pacific
+	_ = MgrEnableModule(&clusterd.Context{Executor: executor}, clusterInfo, "balancer", false)
 	assert.Equal(t, 0, moduleEnableRetries)
 
 }
 
 func TestEnableModule(t *testing.T) {
 	executor := &exectest.MockExecutor{}
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		switch {
 		case args[0] == "mgr" && args[1] == "module" && args[2] == "enable":
@@ -76,15 +91,55 @@ func TestEnableModule(t *testing.T) {
 		return "", errors.Errorf("unexpected ceph command %q", args)
 	}
 
-	err := enableModule(&clusterd.Context{Executor: executor}, "clusterName", "pg_autoscaler", true, "enable")
+	clusterInfo := AdminClusterInfo("mycluster")
+	err := enableModule(&clusterd.Context{Executor: executor}, clusterInfo, "pg_autoscaler", true, "enable")
 	assert.NoError(t, err)
 
-	err = enableModule(&clusterd.Context{Executor: executor}, "clusterName", "prometheus", true, "disable")
+	err = enableModule(&clusterd.Context{Executor: executor}, clusterInfo, "prometheus", true, "disable")
 	assert.NoError(t, err)
 
-	err = enableModule(&clusterd.Context{Executor: executor}, "clusterName", "invalidModuleName", false, "enable")
+	err = enableModule(&clusterd.Context{Executor: executor}, clusterInfo, "invalidModuleName", false, "enable")
 	assert.Error(t, err)
 
-	err = enableModule(&clusterd.Context{Executor: executor}, "clusterName", "pg_autoscaler", false, "invalidCommandArgs")
+	err = enableModule(&clusterd.Context{Executor: executor}, clusterInfo, "pg_autoscaler", false, "invalidCommandArgs")
 	assert.Error(t, err)
+}
+
+func TestEnableDisableBalancerModule(t *testing.T) {
+	executor := &exectest.MockExecutor{}
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+		switch {
+		case args[0] == "balancer" && args[1] == "on":
+			return "", nil
+
+		case args[0] == "balancer" && args[1] == "off":
+			return "", nil
+
+		}
+
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+
+	clusterInfo := AdminClusterInfo("mycluster")
+	err := enableDisableBalancerModule(&clusterd.Context{Executor: executor}, clusterInfo, "on")
+	assert.NoError(t, err)
+
+	err = enableDisableBalancerModule(&clusterd.Context{Executor: executor}, clusterInfo, "off")
+	assert.NoError(t, err)
+}
+
+func TestSetBalancerMode(t *testing.T) {
+	executor := &exectest.MockExecutor{}
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+		if args[0] == "balancer" && args[1] == "mode" && args[2] == "upmap" {
+			return "", nil
+		}
+
+		return "", errors.Errorf("unexpected ceph command %q", args)
+	}
+
+	err := setBalancerMode(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"), "upmap")
+	assert.NoError(t, err)
 }

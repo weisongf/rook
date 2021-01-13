@@ -7,7 +7,7 @@ apiVersion: ceph.rook.io/v1
 kind: CephObjectStore
 metadata:
   name: my-store
-  namespace: rook-ceph
+  namespace: rook-ceph # namespace:cluster
 spec:
   metadataPool:
     replicated:
@@ -19,5 +19,5 @@ spec:
   gateway:
     type: s3
     port: 80
-    securePort:
+    # securePort: 443
     instances: 1

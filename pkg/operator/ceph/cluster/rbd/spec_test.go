@@ -20,53 +20,75 @@ import (
 	"testing"
 
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
-	"github.com/rook/rook/pkg/clusterd"
-	cephconfig "github.com/rook/rook/pkg/daemon/ceph/config"
+	"github.com/rook/rook/pkg/client/clientset/versioned/scheme"
+	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
 	"github.com/rook/rook/pkg/operator/ceph/config"
 	cephtest "github.com/rook/rook/pkg/operator/ceph/test"
-	optest "github.com/rook/rook/pkg/operator/test"
+	cephver "github.com/rook/rook/pkg/operator/ceph/version"
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestPodSpec(t *testing.T) {
-	c := New(
-		&cephconfig.ClusterInfo{FSID: "myfsid"},
-		&clusterd.Context{Clientset: optest.New(1)},
-		"ns",
-		"rook/rook:myversion",
-		cephv1.CephVersionSpec{Image: "ceph/ceph:myceph"},
-		rookalpha.Placement{},
-		rookalpha.Annotations{},
-		cephv1.NetworkSpec{},
-		cephv1.RBDMirroringSpec{Workers: 2},
-		v1.ResourceRequirements{
-			Limits: v1.ResourceList{
-				v1.ResourceCPU:    *resource.NewQuantity(200.0, resource.BinarySI),
-				v1.ResourceMemory: *resource.NewQuantity(600.0, resource.BinarySI),
-			},
-			Requests: v1.ResourceList{
-				v1.ResourceCPU:    *resource.NewQuantity(100.0, resource.BinarySI),
-				v1.ResourceMemory: *resource.NewQuantity(300.0, resource.BinarySI),
-			},
-		},
-		"my-priority-class",
-		metav1.OwnerReference{},
-		"/var/lib/rook/",
-		false,
-		false,
-	)
+	namespace := "ns"
 	daemonConf := daemonConfig{
 		DaemonID:     "a",
 		ResourceName: "rook-ceph-rbd-mirror-a",
 		DataPathMap:  config.NewDatalessDaemonDataPathMap("rook-ceph", "/var/lib/rook"),
 	}
+	cephCluster := &cephv1.CephCluster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      namespace,
+			Namespace: namespace,
+		},
+		Spec: cephv1.ClusterSpec{
+			CephVersion: cephv1.CephVersionSpec{
+				Image: "ceph/ceph:v15",
+			},
+		},
+	}
 
-	d := c.makeDeployment(&daemonConf)
+	rbdMirror := &cephv1.CephRBDMirror{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "a",
+			Namespace: namespace,
+		},
+		Spec: cephv1.RBDMirroringSpec{
+			Count: 1,
+			Resources: v1.ResourceRequirements{
+				Limits: v1.ResourceList{
+					v1.ResourceCPU:    *resource.NewQuantity(200.0, resource.BinarySI),
+					v1.ResourceMemory: *resource.NewQuantity(600.0, resource.BinarySI),
+				},
+				Requests: v1.ResourceList{
+					v1.ResourceCPU:    *resource.NewQuantity(100.0, resource.BinarySI),
+					v1.ResourceMemory: *resource.NewQuantity(300.0, resource.BinarySI),
+				},
+			},
+			PriorityClassName: "my-priority-class",
+		},
+		TypeMeta: controllerTypeMeta,
+	}
+	clusterInfo := &cephclient.ClusterInfo{
+		CephVersion: cephver.Nautilus,
+	}
+	s := scheme.Scheme
+	object := []runtime.Object{rbdMirror}
+	cl := fake.NewFakeClientWithScheme(s, object...)
+	r := &ReconcileCephRBDMirror{client: cl, scheme: s, peers: make(map[string]*peerSpec)}
+	r.cephClusterSpec = &cephCluster.Spec
+	r.clusterInfo = clusterInfo
+
+	d, err := r.makeDeployment(&daemonConf, rbdMirror)
+	assert.NoError(t, err)
 	assert.Equal(t, "rook-ceph-rbd-mirror-a", d.Name)
+	assert.Equal(t, 4, len(d.Spec.Template.Spec.Volumes))
+	assert.Equal(t, 1, len(d.Spec.Template.Spec.Volumes[0].Projected.Sources))
+	assert.Equal(t, 4, len(d.Spec.Template.Spec.Containers[0].VolumeMounts))
 
 	// Deployment should have Ceph labels
 	cephtest.AssertLabelsContainCephRequirements(t, d.ObjectMeta.Labels,
@@ -76,4 +98,15 @@ func TestPodSpec(t *testing.T) {
 	podTemplate.RunFullSuite(config.RbdMirrorType, "a", AppName, "ns", "ceph/ceph:myceph",
 		"200", "100", "600", "300", /* resources */
 		"my-priority-class")
+
+	// Test with peer
+	rbdMirror.Spec.Peers.SecretNames = append(rbdMirror.Spec.Peers.SecretNames, "foo")
+	p := cephclient.PeersSpec{UUID: "c9838c14-d9a1-4e69-b51e-09ff0a4d617c", SiteName: "foo", ClientName: "client.rbd-mirror-peer"}
+	r.peers["foo"] = &peerSpec{poolName: "foo", info: &cephclient.PoolMirroringInfo{Peers: []cephclient.PeersSpec{p}}}
+	d, err = r.makeDeployment(&daemonConf, rbdMirror)
+	assert.NoError(t, err)
+	// We now have the volume for the ConfigMap and the Secret
+	assert.Equal(t, 4, len(d.Spec.Template.Spec.Volumes))
+	assert.Equal(t, 3, len(d.Spec.Template.Spec.Volumes[0].Projected.Sources))
+	assert.Equal(t, 4, len(d.Spec.Template.Spec.Containers[0].VolumeMounts))
 }

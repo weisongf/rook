@@ -1,6 +1,6 @@
 ---
-title: Ceph OSD Management
-weight: 10610
+title: OSD Management
+weight: 11140
 indent: true
 ---
 
@@ -66,18 +66,17 @@ and it is safe to proceed. If an OSD is failing, the PGs will not be perfectly c
 ### From the Toolbox
 
 1. Determine the OSD ID for the OSD to be removed. The osd pod may be in an error state such as `CrashLoopBackoff` or the `ceph` commands
-in the toolbox may show which OSD is `down`.
+in the toolbox may show which OSD is `down`. If you want to remove a healthy OSD, you should run `kubectl -n rook-ceph scale deployment rook-ceph-osd-<ID> --replicas=0` beforehand.
 2. Mark the OSD as `out` if not already marked as such by Ceph. This signals Ceph to start moving (backfilling) the data that was on that OSD to another OSD.
    - `ceph osd out osd.<ID>` (for example if the OSD ID is 23 this would be `ceph osd out osd.23`)
 3. Wait for the data to finish backfilling to other OSDs.
-   - `ceph status` will indicate the backfilling is done when all of the PGs are `active+clean`.
-4. Remove the disk from the node.
-5. Update your CephCluster CR such that the operator won't create an OSD on the device anymore.
+   - `ceph status` will indicate the backfilling is done when all of the PGs are `active+clean`. If desired, it's safe to remove the disk after that.
+4. Update your CephCluster CR such that the operator won't create an OSD on the device anymore.
 Depending on your CR settings, you may need to remove the device from the list or update the device filter.
 If you are using `useAllDevices: true`, no change to the CR is necessary.
-6. Remove the OSD from the Ceph cluster
+5. Remove the OSD from the Ceph cluster
    - `ceph osd purge <ID> --yes-i-really-mean-it`
-7. Verify the OSD is removed from the node in the CRUSH map
+6. Verify the OSD is removed from the node in the CRUSH map
    - `ceph osd tree`
 
 ### Remove the OSD Deployment

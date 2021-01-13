@@ -18,6 +18,7 @@ limitations under the License.
 package flexvolume
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -36,7 +37,8 @@ import (
 )
 
 func TestAttach(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -72,7 +74,7 @@ func TestAttach(t *testing.T) {
 
 	err = controller.Attach(opts, &devicePath)
 	assert.Nil(t, err)
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 	assert.Equal(t, 1, len(volumeAttachment.Attachments))
@@ -87,7 +89,8 @@ func TestAttach(t *testing.T) {
 }
 
 func TestAttachAlreadyExist(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -109,7 +112,8 @@ func TestAttachAlreadyExist(t *testing.T) {
 			Phase: "running",
 		},
 	}
-	clientset.CoreV1().Pods("Default").Create(&pod)
+	_, err := clientset.CoreV1().Pods("Default").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	existingCRD := &rookalpha.Volume{
 		ObjectMeta: metav1.ObjectMeta{
@@ -127,7 +131,7 @@ func TestAttachAlreadyExist(t *testing.T) {
 		},
 	}
 
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -158,7 +162,8 @@ func TestAttachAlreadyExist(t *testing.T) {
 }
 
 func TestAttachReadOnlyButRWAlreadyExist(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -180,7 +185,8 @@ func TestAttachReadOnlyButRWAlreadyExist(t *testing.T) {
 			Phase: "running",
 		},
 	}
-	clientset.CoreV1().Pods("Default").Create(&pod)
+	_, err := clientset.CoreV1().Pods("Default").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	existingCRD := &rookalpha.Volume{
 		ObjectMeta: metav1.ObjectMeta{
@@ -197,7 +203,7 @@ func TestAttachReadOnlyButRWAlreadyExist(t *testing.T) {
 			},
 		},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -228,7 +234,8 @@ func TestAttachReadOnlyButRWAlreadyExist(t *testing.T) {
 }
 
 func TestAttachRWButROAlreadyExist(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -256,7 +263,7 @@ func TestAttachRWButROAlreadyExist(t *testing.T) {
 			},
 		},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -286,7 +293,8 @@ func TestAttachRWButROAlreadyExist(t *testing.T) {
 }
 
 func TestMultipleAttachReadOnly(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -324,7 +332,7 @@ func TestMultipleAttachReadOnly(t *testing.T) {
 			},
 		},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -341,7 +349,7 @@ func TestMultipleAttachReadOnly(t *testing.T) {
 	err = controller.Attach(opts, &devicePath)
 	assert.Nil(t, err)
 
-	volAtt, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	volAtt, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 	assert.Equal(t, 2, len(volAtt.Attachments))
@@ -362,7 +370,8 @@ func TestMultipleAttachReadOnly(t *testing.T) {
 }
 
 func TestOrphanAttachOriginalPodDoesntExist(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -400,7 +409,7 @@ func TestOrphanAttachOriginalPodDoesntExist(t *testing.T) {
 			},
 		},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -417,7 +426,7 @@ func TestOrphanAttachOriginalPodDoesntExist(t *testing.T) {
 	err = controller.Attach(opts, &devicePath)
 	assert.Nil(t, err)
 
-	volAtt, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	volAtt, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volAtt)
 	assert.Equal(t, 1, len(volAtt.Attachments))
@@ -433,7 +442,8 @@ func TestOrphanAttachOriginalPodDoesntExist(t *testing.T) {
 }
 
 func TestOrphanAttachOriginalPodNameSame(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -457,7 +467,8 @@ func TestOrphanAttachOriginalPodNameSame(t *testing.T) {
 			NodeName: "node1",
 		},
 	}
-	clientset.CoreV1().Pods("Default").Create(&pod)
+	_, err := clientset.CoreV1().Pods("Default").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	// existing record of old attachment. Pod namespace and name must much with the new attachment input to simulate that the new attachment is for the same pod
 	existingCRD := &rookalpha.Volume{
@@ -476,7 +487,7 @@ func TestOrphanAttachOriginalPodNameSame(t *testing.T) {
 		},
 	}
 
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -514,7 +525,7 @@ func TestOrphanAttachOriginalPodNameSame(t *testing.T) {
 	err = controller.Attach(opts, &devicePath)
 	assert.NoError(t, err)
 
-	volAtt, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	volAtt, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volAtt)
 	assert.Equal(t, 1, len(volAtt.Attachments))
@@ -533,7 +544,8 @@ func TestOrphanAttachOriginalPodNameSame(t *testing.T) {
 // If the Volume record was previously created for this pod
 // and the attach flow should continue.
 func TestVolumeExistAttach(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -572,7 +584,7 @@ func TestVolumeExistAttach(t *testing.T) {
 			},
 		},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -589,14 +601,15 @@ func TestVolumeExistAttach(t *testing.T) {
 	err = controller.Attach(opts, &devicePath)
 	assert.Nil(t, err)
 
-	newAttach, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	newAttach, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, newAttach)
 	// TODO: Check that the volume attach was not updated (can't use ResourceVersion in the fake testing)
 }
 
 func TestDetach(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -616,7 +629,7 @@ func TestDetach(t *testing.T) {
 		},
 		Attachments: []rookalpha.Attachment{},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -637,13 +650,14 @@ func TestDetach(t *testing.T) {
 	err = controller.Detach(opts, nil)
 	assert.Nil(t, err)
 
-	_, err = context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	_, err = context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.NotNil(t, err)
 	assert.True(t, errors.IsNotFound(err))
 }
 
 func TestDetachWithAttachmentLeft(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -670,7 +684,7 @@ func TestDetachWithAttachmentLeft(t *testing.T) {
 			},
 		},
 	}
-	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(existingCRD)
+	volumeAttachment, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Create(ctx, existingCRD, metav1.CreateOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volumeAttachment)
 
@@ -691,13 +705,14 @@ func TestDetachWithAttachmentLeft(t *testing.T) {
 	err = controller.Detach(opts, nil)
 	assert.Nil(t, err)
 
-	volAttach, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get("pvc-123", metav1.GetOptions{})
+	volAttach, err := context.RookClientset.RookV1alpha2().Volumes("rook-system").Get(ctx, "pvc-123", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.NotNil(t, volAttach)
 }
 
 func TestGetAttachInfoFromMountDir(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -733,7 +748,8 @@ func TestGetAttachInfoFromMountDir(t *testing.T) {
 			},
 		},
 	}
-	clientset.CoreV1().PersistentVolumes().Create(pv)
+	_, err := clientset.CoreV1().PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	sc := storagev1.StorageClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -742,7 +758,8 @@ func TestGetAttachInfoFromMountDir(t *testing.T) {
 		Provisioner: "ceph.rook.io/rook",
 		Parameters:  map[string]string{"pool": "testpool", "clusterNamespace": "testCluster", "fsType": "ext3"},
 	}
-	clientset.StorageV1().StorageClasses().Create(&sc)
+	_, err = clientset.StorageV1().StorageClasses().Create(ctx, &sc, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	pod := v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -754,7 +771,8 @@ func TestGetAttachInfoFromMountDir(t *testing.T) {
 			NodeName: "node1",
 		},
 	}
-	clientset.CoreV1().Pods("testnamespace").Create(&pod)
+	_, err = clientset.CoreV1().Pods("testnamespace").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	opts := AttachOptions{
 		VolumeName: "pvc-123",
@@ -766,7 +784,7 @@ func TestGetAttachInfoFromMountDir(t *testing.T) {
 		volumeManager: &manager.FakeVolumeManager{},
 	}
 
-	err := controller.GetAttachInfoFromMountDir(opts.MountDir, &opts)
+	err = controller.GetAttachInfoFromMountDir(opts.MountDir, &opts)
 	assert.Nil(t, err)
 
 	assert.Equal(t, "pod123", opts.PodID)
@@ -788,7 +806,8 @@ func TestParseClusterName(t *testing.T) {
 }
 
 func testParseClusterNamespace(t *testing.T, namespaceParameter string) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	context := &clusterd.Context{
 		Clientset:     clientset,
@@ -801,7 +820,9 @@ func testParseClusterNamespace(t *testing.T, namespaceParameter string) {
 		Provisioner: "ceph.rook.io/rook",
 		Parameters:  map[string]string{"pool": "testpool", namespaceParameter: "testCluster", "fsType": "ext3"},
 	}
-	clientset.StorageV1().StorageClasses().Create(&sc)
+	_, err := clientset.StorageV1().StorageClasses().Create(ctx, &sc, metav1.CreateOptions{})
+	assert.NoError(t, err)
+
 	volumeAttachment, err := attachment.New(context)
 	assert.Nil(t, err)
 

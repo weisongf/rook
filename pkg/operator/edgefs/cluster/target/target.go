@@ -17,13 +17,14 @@ limitations under the License.
 package target
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
 
 	"github.com/coreos/pkg/capnslog"
 	edgefsv1 "github.com/rook/rook/pkg/apis/edgefs.rook.io/v1"
-	rookalpha "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -36,26 +37,20 @@ var logger = capnslog.NewPackageLogger("github.com/rook/rook", "edgefs-op-target
 
 const (
 	appName                   = "rook-edgefs-target"
-	targetAppNameFmt          = "rook-edgefs-target-id-%d"
-	appNameFmt                = "rook-edgefs-target-%s"
-	targetLabelKey            = "edgefs-target-id"
 	defaultServiceAccountName = "rook-edgefs-cluster"
-	labelingRetries           = 5
-	nodeTypeLabelFmt          = "%s-nodetype"
-	sleepTime                 = 5 // time beetween statefulset update check
 )
 
 // Cluster keeps track of the Targets
 type Cluster struct {
 	context          *clusterd.Context
 	Namespace        string
-	annotations      rookalpha.Annotations
-	placement        rookalpha.Placement
+	annotations      rookv1.Annotations
+	placement        rookv1.Placement
 	Version          string
-	Storage          rookalpha.StorageScopeSpec
+	Storage          rookv1.StorageScopeSpec
 	dataDirHostPath  string
 	dataVolumeSize   resource.Quantity
-	NetworkSpec      rookalpha.NetworkSpec
+	NetworkSpec      rookv1.NetworkSpec
 	Privileged       bool
 	resources        v1.ResourceRequirements
 	resourceProfile  string
@@ -72,12 +67,12 @@ func New(
 	namespace,
 	version,
 	serviceAccount string,
-	storageSpec rookalpha.StorageScopeSpec,
+	storageSpec rookv1.StorageScopeSpec,
 	dataDirHostPath string,
 	dataVolumeSize resource.Quantity,
-	annotations rookalpha.Annotations,
-	placement rookalpha.Placement,
-	NetworkSpec rookalpha.NetworkSpec,
+	annotations rookv1.Annotations,
+	placement rookv1.Placement,
+	NetworkSpec rookv1.NetworkSpec,
 	resources v1.ResourceRequirements,
 	resourceProfile string,
 	chunkCacheSize resource.Quantity,
@@ -113,13 +108,13 @@ func New(
 }
 
 // Start the target management
-func (c *Cluster) Start(rookImage string, nodes []rookalpha.Node, dro edgefsv1.DevicesResurrectOptions) (err error) {
+func (c *Cluster) Start(rookImage string, nodes []rookv1.Node, dro edgefsv1.DevicesResurrectOptions) (err error) {
 	logger.Infof("start running targets in namespace %s", c.Namespace)
-
 	logger.Infof("Target Image is %s", rookImage)
-
+	ctx := context.TODO()
 	headlessService, _ := c.makeHeadlessService()
-	if _, err := c.context.Clientset.CoreV1().Services(c.Namespace).Create(headlessService); err != nil {
+
+	if _, err := c.context.Clientset.CoreV1().Services(c.Namespace).Create(ctx, headlessService, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -129,7 +124,7 @@ func (c *Cluster) Start(rookImage string, nodes []rookalpha.Node, dro edgefsv1.D
 	}
 
 	statefulSet, _ := c.makeStatefulSet(int32(len(nodes)), rookImage, dro)
-	if _, err := c.context.Clientset.AppsV1().StatefulSets(c.Namespace).Create(statefulSet); err != nil {
+	if _, err := c.context.Clientset.AppsV1().StatefulSets(c.Namespace).Create(ctx, statefulSet, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -148,8 +143,9 @@ func (c *Cluster) Start(rookImage string, nodes []rookalpha.Node, dro edgefsv1.D
 
 // UpdateStatefulsetAndWait updates a statefulset and waits until it is running to return. It will
 // error if the statefulset does not exist to be updated or if it takes too long.
-func UpdateStatefulsetAndWait(context *clusterd.Context, sts *appsv1.StatefulSet, namespace string) (*appsv1.StatefulSet, error) {
-	original, err := context.Clientset.AppsV1().StatefulSets(namespace).Get(sts.Name, metav1.GetOptions{})
+func UpdateStatefulsetAndWait(clusterdContext *clusterd.Context, sts *appsv1.StatefulSet, namespace string) (*appsv1.StatefulSet, error) {
+	ctx := context.TODO()
+	original, err := clusterdContext.Clientset.AppsV1().StatefulSets(namespace).Get(ctx, sts.Name, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get statefulset %s. %+v", sts.Name, err)
 	}
@@ -157,7 +153,7 @@ func UpdateStatefulsetAndWait(context *clusterd.Context, sts *appsv1.StatefulSet
 	// set updateTime annotation to force rolling update of Statefulset
 	sts.Spec.Template.Annotations["UpdateTime"] = time.Now().Format(time.RFC850)
 
-	_, err = context.Clientset.AppsV1().StatefulSets(namespace).Update(sts)
+	_, err = clusterdContext.Clientset.AppsV1().StatefulSets(namespace).Update(ctx, sts, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update statefulset %s. %+v", sts.Name, err)
 	}
@@ -166,7 +162,7 @@ func UpdateStatefulsetAndWait(context *clusterd.Context, sts *appsv1.StatefulSet
 	attempts := 24 * int(original.Status.Replicas) // 2 minutes per replica
 	for i := 0; i < attempts; i++ {
 		// check for the status of the statefulset
-		statefulset, err := context.Clientset.AppsV1().StatefulSets(namespace).Get(sts.Name, metav1.GetOptions{})
+		statefulset, err := clusterdContext.Clientset.AppsV1().StatefulSets(namespace).Get(ctx, sts.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, fmt.Errorf("failed to get statefulset %s. %+v", statefulset.Name, err)
 		}

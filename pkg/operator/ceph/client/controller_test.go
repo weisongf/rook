@@ -18,12 +18,17 @@ package client
 
 import (
 	"bytes"
+	"fmt"
+	"io/ioutil"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/pkg/errors"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
+	cephclient "github.com/rook/rook/pkg/daemon/ceph/client"
+	"github.com/rook/rook/pkg/operator/ceph/cluster/mon"
 	testop "github.com/rook/rook/pkg/operator/test"
 	exectest "github.com/rook/rook/pkg/util/exec/test"
 	"github.com/stretchr/testify/assert"
@@ -60,7 +65,7 @@ func TestValidateClient(t *testing.T) {
 }
 
 func TestGenerateClient(t *testing.T) {
-	clientset := testop.New(1)
+	clientset := testop.New(t, 1)
 	context := &clusterd.Context{Clientset: clientset}
 
 	p := &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client1", Namespace: "myns"},
@@ -100,19 +105,28 @@ func TestGenerateClient(t *testing.T) {
 }
 
 func TestCreateClient(t *testing.T) {
-	clientset := testop.New(1)
+	clientset := testop.New(t, 1)
+	adminSecret := "AQDkLIBd9vLGJxAAnXsIKPrwvUXAmY+D1g0X1Q==" //nolint:gosec // This is just a var name, not a real secret
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutputFile: func(debug bool, actionName string, command, outfileArg string, args ...string) (string, error) {
+		MockExecuteCommandWithOutputFile: func(command, outfileArg string, args ...string) (string, error) {
 			logger.Infof("Command: %s %v", command, args)
 			if command == "ceph" && args[1] == "get-or-create-key" {
 				return `{"key":"AQC7ilJdAPijOBAABp+YAzg2QupRAWdnIh7w/Q=="}`, nil
 			}
 			return "", errors.Errorf("unexpected ceph command '%v'", args)
 		},
+		MockExecuteCommandWithOutput: func(command string, args ...string) (string, error) {
+			logger.Infof("COMMAND: %s %v", command, args)
+			if command == "ceph-authtool" && args[0] == "--create-keyring" {
+				filename := args[1]
+				assert.NoError(t, ioutil.WriteFile(filename, []byte(fmt.Sprintf("key = %s", adminSecret)), 0600))
+			}
+			return "", nil
+		},
 	}
 	context := &clusterd.Context{Executor: executor, Clientset: clientset}
-
-	p := &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client1", Namespace: "myns"},
+	namespace := "ns"
+	p := &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client1", Namespace: namespace},
 		Spec: cephv1.ClientSpec{
 			Caps: map[string]string{
 				"osd": "allow *",
@@ -122,13 +136,20 @@ func TestCreateClient(t *testing.T) {
 		},
 	}
 
-	exists, _ := clientExists(context, p)
+	configDir := namespace
+	err := os.MkdirAll(configDir, 0755)
+	assert.NoError(t, err)
+	defer os.RemoveAll(configDir)
+	clusterInfo, _, _, err := mon.CreateOrLoadClusterInfo(context, namespace, &metav1.OwnerReference{})
+	assert.NoError(t, err)
+
+	exists, _ := clientExists(context, clusterInfo, p)
 	assert.False(t, exists)
-	err := createClient(context, p)
+	err = createClient(context, p)
 	assert.Nil(t, err)
 
 	// fail if caps are empty
-	p = &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client1", Namespace: "myns"},
+	p = &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client1", Namespace: clusterInfo.Namespace},
 		Spec: cephv1.ClientSpec{
 			Caps: map[string]string{
 				"osd": "",
@@ -137,16 +158,16 @@ func TestCreateClient(t *testing.T) {
 			},
 		},
 	}
-	exists, _ = clientExists(context, p)
+	exists, _ = clientExists(context, clusterInfo, p)
 	assert.False(t, exists)
 	err = createClient(context, p)
 	assert.NotNil(t, err)
 }
 
 func TestUpdateClient(t *testing.T) {
-	clientset := testop.New(1)
+	clientset := testop.New(t, 1)
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutputFile: func(debug bool, actionName string, command, outfileArg string, args ...string) (string, error) {
+		MockExecuteCommandWithOutputFile: func(command, outfileArg string, args ...string) (string, error) {
 			logger.Infof("Command: %s %v", command, args)
 			return "", nil
 		},
@@ -178,9 +199,9 @@ func TestUpdateClient(t *testing.T) {
 }
 
 func TestDeleteClient(t *testing.T) {
-	clientset := testop.New(2)
+	clientset := testop.New(t, 2)
 	executor := &exectest.MockExecutor{
-		MockExecuteCommandWithOutputFile: func(debug bool, actionName string, command, outfileArg string, args ...string) (string, error) {
+		MockExecuteCommandWithOutputFile: func(command, outfileArg string, args ...string) (string, error) {
 			logger.Infof("Command: %s %v", command, args)
 			if command == "ceph" && args[1] == "get-key" && args[2] == "client1" {
 				return `{"key":"AQC7ilJdAPijOBAABp+YAzg2QupRAWdnIh7w/Q=="}`, nil
@@ -195,7 +216,8 @@ func TestDeleteClient(t *testing.T) {
 
 	// delete a client that exists
 	p := &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client1", Namespace: "myns"}}
-	exists, err := clientExists(context, p)
+	clusterInfo := cephclient.AdminClusterInfo(p.Namespace)
+	exists, err := clientExists(context, clusterInfo, p)
 	assert.Nil(t, err)
 	assert.True(t, exists)
 	err = deleteClient(context, p)
@@ -203,7 +225,7 @@ func TestDeleteClient(t *testing.T) {
 
 	// succeed even if the client doesn't exist
 	p = &cephv1.CephClient{ObjectMeta: metav1.ObjectMeta{Name: "client2", Namespace: "myns"}}
-	exists, err = clientExists(context, p)
+	exists, err = clientExists(context, clusterInfo, p)
 	assert.NotNil(t, err)
 	assert.False(t, exists)
 	err = deleteClient(context, p)

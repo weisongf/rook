@@ -22,14 +22,13 @@ import (
 	"time"
 
 	"github.com/coreos/pkg/capnslog"
-	opkit "github.com/rook/operator-kit"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/agent/flexvolume"
 	"github.com/rook/rook/pkg/daemon/ceph/agent/flexvolume/attachment"
-	opcluster "github.com/rook/rook/pkg/operator/ceph/cluster"
+	opcontroller "github.com/rook/rook/pkg/operator/ceph/controller"
+
 	"github.com/rook/rook/pkg/operator/k8sutil"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -45,7 +44,6 @@ var (
 // ClusterController monitors cluster events and reacts to clean up any affected volume attachments
 type ClusterController struct {
 	context              *clusterd.Context
-	scheme               *runtime.Scheme
 	volumeAttachment     attachment.Attachment
 	flexvolumeController flexvolume.VolumeController
 }
@@ -62,19 +60,21 @@ func NewClusterController(context *clusterd.Context, flexvolumeController flexvo
 }
 
 // StartWatch will start the watching of cluster events by this controller
-func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) error {
+func (c *ClusterController) StartWatch(namespace string, stopCh chan struct{}) {
 	resourceHandlerFuncs := cache.ResourceEventHandlerFuncs{
 		DeleteFunc: c.onDelete,
 	}
 
 	logger.Infof("start watching cluster resources")
-	watcher := opkit.NewWatcher(opcluster.ClusterResource, namespace, resourceHandlerFuncs, c.context.RookClientset.CephV1().RESTClient())
-	go watcher.Watch(&cephv1.CephCluster{}, stopCh)
-	return nil
+	go k8sutil.WatchCR(opcontroller.ClusterResource, namespace, resourceHandlerFuncs, c.context.RookClientset.CephV1().RESTClient(), &cephv1.CephCluster{}, stopCh)
 }
 
 func (c *ClusterController) onDelete(obj interface{}) {
-	cluster := obj.(*cephv1.CephCluster).DeepCopy()
+	cluster, ok := obj.(*cephv1.CephCluster)
+	if !ok {
+		return
+	}
+	cluster = cluster.DeepCopy()
 
 	c.handleClusterDelete(cluster, removeAttachmentRetryInterval*time.Second)
 }

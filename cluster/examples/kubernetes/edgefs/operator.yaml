@@ -72,6 +72,35 @@ spec:
 apiVersion: apiextensions.k8s.io/v1beta1
 kind: CustomResourceDefinition
 metadata:
+  name: smbs.edgefs.rook.io
+spec:
+  group: edgefs.rook.io
+  names:
+    kind: SMB
+    listKind: SMBList
+    plural: smbs
+    singular: smb
+  scope: Namespaced
+  version: v1
+  validation:
+    openAPIV3Schema:
+      properties:
+        spec:
+          properties:
+            instances:
+              type: integer
+              minimum: 1
+          required:
+          - instances
+  additionalPrinterColumns:
+    - name: Instances
+      type: string
+      description: Edgefs's service instances count
+      JSONPath: .spec.instances
+---
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
   name: nfss.edgefs.rook.io
 spec:
   group: edgefs.rook.io
@@ -252,7 +281,7 @@ spec:
       description: ISGW client' service names
 ---
 # The cluster role for managing all the cluster-specific resources in a namespace
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: rook-edgefs-cluster-mgmt
@@ -271,7 +300,7 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---
 # The role for the operator to manage resources in the system namespace
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: rook-edgefs-system
@@ -288,7 +317,7 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "delete"]
 ---
 # The cluster role for managing the Rook CRDs
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: rook-edgefs-global
@@ -330,7 +359,7 @@ metadata:
 ---
 # Grant the operator, agent, and discovery agents access to resources in its own namespace
 kind: RoleBinding
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: rook-edgefs-system
   namespace: rook-edgefs-system
@@ -348,10 +377,9 @@ subjects:
 ---
 # Grant the rook system daemons cluster-wide access to manage the Rook CRDs, PVCs, and storage classes
 kind: ClusterRoleBinding
-apiVersion: rbac.authorization.k8s.io/v1beta1
+apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: rook-edgefs-global
-  namespace: rook-edgefs-system
   labels:
     operator: rook
     storage-backend: edgefs

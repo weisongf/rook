@@ -49,7 +49,7 @@ func TestClusterDeleteSingleAttachment(t *testing.T) {
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
 	defer os.Unsetenv(k8sutil.NodeNameEnvVar)
 
-	clientset := test.New(3)
+	clientset := test.New(t, 3)
 	context := &clusterd.Context{
 		Clientset: clientset,
 	}
@@ -133,7 +133,7 @@ func TestClusterDeleteAttachedToOtherNode(t *testing.T) {
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
 	defer os.Unsetenv(k8sutil.NodeNameEnvVar)
 
-	clientset := test.New(3)
+	clientset := test.New(t, 3)
 	context := &clusterd.Context{
 		Clientset: clientset,
 	}
@@ -195,7 +195,7 @@ func TestClusterDeleteMultiAttachmentRace(t *testing.T) {
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
 	defer os.Unsetenv(k8sutil.NodeNameEnvVar)
 
-	clientset := test.New(3)
+	clientset := test.New(t, 3)
 	context := &clusterd.Context{
 		Clientset: clientset,
 	}
@@ -274,7 +274,7 @@ func TestClusterDeleteMultiAttachmentRace(t *testing.T) {
 	clusterToDelete := &cephv1.CephCluster{ObjectMeta: metav1.ObjectMeta{Namespace: clusterName}}
 	controller.handleClusterDelete(clusterToDelete, time.Millisecond)
 
-	// both attachments should have made it all the way through the clean up process, meaing that Delete
+	// both attachments should have made it all the way through the clean up process, meaning that Delete
 	// (which is idempotent) should have been called twice.
 	assert.Equal(t, 2, deleteCount)
 }

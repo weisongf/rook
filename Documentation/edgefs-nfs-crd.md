@@ -6,6 +6,8 @@ indent: true
 
 # EdgeFS Scale-Out NFS CRD
 
+[Deprecated](https://github.com/rook/rook/issues/5823#issuecomment-703834989)
+
 Rook allows creation and customization of EdgeFS NFS filesystems through the custom resource definitions (CRDs).
 The following settings are available for customization of EdgeFS NFS services.
 
@@ -53,7 +55,7 @@ spec:
 * `name`: The name of the NFS system to create, which must match existing EdgeFS service.
 * `namespace`: The namespace of the Rook cluster where the NFS service is created.
 * `instances`: The number of active NFS service instances. EdgeFS NFS service is Multi-Head capable, such so that multiple PODs can mount same tenant's buckets via different endpoints. [EdgeFS CSI provisioner](edgefs-csi.md) orchestrates distribution and load balancing across NFS service instances in round-robin or random policy ways.
-* `relaxedDirUpdates`: If set to `true` then it will significantly improve performance of directory operations by defering updates, guaranteeing eventual directory consistency. This option is recommended when a bucket exported via single NFS instance and it is not a destination for ISGW Link synchronization.
+* `relaxedDirUpdates`: If set to `true` then it will significantly improve performance of directory operations by deferring updates, guaranteeing eventual directory consistency. This option is recommended when a bucket exported via single NFS instance and it is not a destination for ISGW Link synchronization.
 * `chunkCacheSize`: Limit amount of memory allocated for dynamic chunk cache. By default NFS pod uses up to 75% of available memory as chunk caching area. This option can influence this allocation strategy.
 * `annotations`: Key value pair list of annotations to add.
 * `placement`: The NFS PODs can be given standard Kubernetes placement restrictions with `nodeAffinity`, `tolerations`, `podAffinity`, and `podAntiAffinity` similar to placement defined for daemons configured by the [cluster CRD](/cluster/examples/kubernetes/edgefs/cluster.yaml).
@@ -114,6 +116,8 @@ efscli bucket create Hawaii/Pepsi/bk1
 Now cluster is setup, services can be now created and attached to CSI provisioner.
 
 4. Create NFS service objects for tenants:
+
+> **NOTE**: Service names must contain only [lowercase alphanumeric characters or '-'](https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#dns-label-names). Otherwise, corresponding EdgeFS NFS object names created in the next step will be invalid.
 
 ```console
 efscli service create nfs nfs-cola

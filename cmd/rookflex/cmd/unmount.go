@@ -24,7 +24,7 @@ import (
 
 	"github.com/rook/rook/pkg/daemon/ceph/agent/flexvolume"
 	"github.com/spf13/cobra"
-	k8smount "k8s.io/kubernetes/pkg/util/mount"
+	k8smount "k8s.io/utils/mount"
 )
 
 var (
@@ -52,6 +52,7 @@ func handleUnmount(cmd *cobra.Command, args []string) error {
 	mounter := getMounter()
 
 	// Check if it's a cephfs mount
+	// #nosec G204 Rook controls the input to the exec arguments
 	fstype, err := exec.Command("findmnt", "--nofsroot", "--noheadings", "--output", "FSTYPE", "--submounts", "--target", mountDir).Output()
 	if err != nil {
 		return fmt.Errorf("failed to retrieve filesystem type for path %q. %+v", mountDir, err)

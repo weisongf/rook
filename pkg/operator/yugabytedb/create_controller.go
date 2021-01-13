@@ -17,6 +17,8 @@ limitations under the License.
 package yugabytedb
 
 import (
+	"context"
+
 	yugabytedbv1alpha1 "github.com/rook/rook/pkg/apis/yugabytedb.rook.io/v1alpha1"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	appsv1 "k8s.io/api/apps/v1"
@@ -26,7 +28,11 @@ import (
 )
 
 func (c *ClusterController) OnAdd(obj interface{}) {
-	clusterObj := obj.(*yugabytedbv1alpha1.YBCluster).DeepCopy()
+	clusterObj, ok := obj.(*yugabytedbv1alpha1.YBCluster)
+	if !ok {
+		return
+	}
+	clusterObj = clusterObj.DeepCopy()
 	logger.Infof("new cluster %s added to namespace %s", clusterObj.Name, clusterObj.Namespace)
 
 	cluster := NewCluster(clusterObj, c.context)
@@ -79,6 +85,7 @@ func (c *ClusterController) createTServerUIService(cluster *cluster) error {
 }
 
 func (c *ClusterController) createUIService(cluster *cluster, isTServerService bool) error {
+	ctx := context.TODO()
 	ports, err := getPortsFromSpec(cluster.spec.Master.Network)
 	if err != nil {
 		return err
@@ -121,7 +128,7 @@ func (c *ClusterController) createUIService(cluster *cluster, isTServerService b
 	}
 	k8sutil.SetOwnerRef(&uiService.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(uiService); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(ctx, uiService, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -144,6 +151,7 @@ func (c *ClusterController) createTServerHeadlessService(cluster *cluster) error
 func (c *ClusterController) createHeadlessService(cluster *cluster, isTServerService bool) error {
 	serviceName := masterNamePlural
 	label := masterName
+	ctx := context.TODO()
 
 	if isTServerService {
 		serviceName = tserverNamePlural
@@ -176,7 +184,7 @@ func (c *ClusterController) createHeadlessService(cluster *cluster, isTServerSer
 
 	k8sutil.SetOwnerRef(&headlessService.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(headlessService); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(cluster.namespace).Create(ctx, headlessService, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -201,6 +209,7 @@ func (c *ClusterController) createStatefulSet(cluster *cluster, isTServerStatefu
 	name := masterName
 	label := masterName
 	serviceName := masterNamePlural
+	ctx := context.TODO()
 	volumeClaimTemplates := []v1.PersistentVolumeClaim{
 		cluster.spec.Master.VolumeClaimTemplate,
 	}
@@ -251,7 +260,7 @@ func (c *ClusterController) createStatefulSet(cluster *cluster, isTServerStatefu
 	cluster.annotations.ApplyToObjectMeta(&statefulSet.ObjectMeta)
 	k8sutil.SetOwnerRef(&statefulSet.ObjectMeta, &cluster.ownerRef)
 
-	if _, err := c.context.Clientset.AppsV1().StatefulSets(cluster.namespace).Create(statefulSet); err != nil {
+	if _, err := c.context.Clientset.AppsV1().StatefulSets(cluster.namespace).Create(ctx, statefulSet, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return err
 		}
@@ -291,16 +300,20 @@ func createPodSpec(cluster *cluster, containerImage string, isTServerStatefulset
 }
 
 func createContainer(cluster *cluster, containerImage string, isTServerStatefulset bool, name, serviceName string) v1.Container {
+	resources := getResourceSpec(cluster.spec.Master.Resource, isTServerStatefulset)
 	ports, _ := getPortsFromSpec(cluster.spec.Master.Network)
-	command := createMasterContainerCommand(cluster.namespace, serviceName, ports.masterPorts.rpc, cluster.spec.Master.Replicas)
+	masterCompleteName := cluster.addCRNameSuffix(masterName)
+	command := createMasterContainerCommand(cluster.namespace, serviceName, masterCompleteName, ports.masterPorts.rpc, cluster.spec.Master.Replicas, resources)
 	containerPorts := createMasterContainerPortsList(ports)
 	volumeMountName := cluster.addCRNameSuffix(cluster.spec.Master.VolumeClaimTemplate.Name)
 
 	if isTServerStatefulset {
 		masterServiceName := cluster.addCRNameSuffix(masterNamePlural)
+		masterCompleteName := cluster.addCRNameSuffix(masterName)
 		masterRPCPort := ports.masterPorts.rpc
 		ports, _ = getPortsFromSpec(cluster.spec.TServer.Network)
-		command = createTServerContainerCommand(cluster.namespace, serviceName, masterServiceName, masterRPCPort, ports.tserverPorts.rpc, ports.tserverPorts.postgres, cluster.spec.TServer.Replicas)
+		resources = getResourceSpec(cluster.spec.TServer.Resource, isTServerStatefulset)
+		command = createTServerContainerCommand(cluster.namespace, serviceName, masterServiceName, masterCompleteName, masterRPCPort, ports.tserverPorts.rpc, ports.tserverPorts.postgres, cluster.spec.TServer.Replicas, resources)
 		containerPorts = createTServerContainerPortsList(ports)
 		volumeMountName = cluster.addCRNameSuffix(cluster.spec.TServer.VolumeClaimTemplate.Name)
 	}
@@ -323,7 +336,7 @@ func createContainer(cluster *cluster, containerImage string, isTServerStatefuls
 				},
 			},
 			{
-				Name: envPodName,
+				Name: k8sutil.PodNameEnvVar,
 				ValueFrom: &v1.EnvVarSource{
 					FieldRef: &v1.ObjectFieldSelector{
 						FieldPath: envPodNameVal,
@@ -331,8 +344,9 @@ func createContainer(cluster *cluster, containerImage string, isTServerStatefuls
 				},
 			},
 		},
-		Command: command,
-		Ports:   containerPorts,
+		Resources: resources,
+		Command:   command,
+		Ports:     containerPorts,
 		VolumeMounts: []v1.VolumeMount{
 			{
 				Name:      volumeMountName,

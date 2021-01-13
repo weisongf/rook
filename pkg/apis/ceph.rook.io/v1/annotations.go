@@ -17,30 +17,38 @@ limitations under the License.
 package v1
 
 import (
-	rook "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rook "github.com/rook/rook/pkg/apis/rook.io/v1"
 )
 
 // GetMgrAnnotations returns the Annotations for the MGR service
 func GetMgrAnnotations(a rook.AnnotationsSpec) rook.Annotations {
-	return a.All().Merge(a[KeyMgr])
+	return mergeAllAnnotationsWithKey(a, KeyMgr)
 }
 
 // GetMonAnnotations returns the Annotations for the MON service
 func GetMonAnnotations(a rook.AnnotationsSpec) rook.Annotations {
-	return a.All().Merge(a[KeyMon])
+	return mergeAllAnnotationsWithKey(a, KeyMon)
+}
+
+// GetOSDPrepareAnnotations returns the annotations for the OSD service
+func GetOSDPrepareAnnotations(a rook.AnnotationsSpec) rook.Annotations {
+	return mergeAllAnnotationsWithKey(a, KeyOSDPrepare)
 }
 
 // GetOSDAnnotations returns the annotations for the OSD service
 func GetOSDAnnotations(a rook.AnnotationsSpec) rook.Annotations {
-	return a.All().Merge(a[KeyOSD])
+	return mergeAllAnnotationsWithKey(a, KeyOSD)
 }
 
-// GetRGWAnnotations returns the Annotations for the RBD mirrors
-func GetRGWAnnotations(a rook.AnnotationsSpec) rook.Annotations {
-	return a.All().Merge(a[KeyRGWMirror])
+// GetCleanupAnnotations returns the Annotations for the cleanup job
+func GetCleanupAnnotations(a rook.AnnotationsSpec) rook.Annotations {
+	return mergeAllAnnotationsWithKey(a, KeyCleanup)
 }
 
-// GetRBDMirrorAnnotations returns the Annotations for the RBD mirrors
-func GetRBDMirrorAnnotations(a rook.AnnotationsSpec) rook.Annotations {
-	return a.All().Merge(a[KeyRBDMirror])
+func mergeAllAnnotationsWithKey(a rook.AnnotationsSpec, name rook.KeyType) rook.Annotations {
+	all := a.All()
+	if all != nil {
+		return all.Merge(a[name])
+	}
+	return a[name]
 }

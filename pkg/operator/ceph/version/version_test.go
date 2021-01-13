@@ -24,21 +24,22 @@ import (
 )
 
 func TestToString(t *testing.T) {
-	assert.Equal(t, "14.0.0-0 nautilus", fmt.Sprintf("%s", &Nautilus))
-	assert.Equal(t, "13.0.0-0 mimic", fmt.Sprintf("%s", &Mimic))
+	assert.Equal(t, "14.0.0-0 nautilus", Nautilus.String())
+	assert.Equal(t, "15.0.0-0 octopus", Octopus.String())
+	received := CephVersion{-1, 0, 0, 0}
 
 	expected := fmt.Sprintf("-1.0.0-0 %s", unknownVersionString)
-	assert.Equal(t, expected, fmt.Sprintf("%s", &CephVersion{-1, 0, 0, 0}))
+	assert.Equal(t, expected, received.String())
 }
 
 func TestCephVersionFormatted(t *testing.T) {
 	assert.Equal(t, "ceph version 14.0.0-0 nautilus", Nautilus.CephVersionFormatted())
-	assert.Equal(t, "ceph version 13.0.0-0 mimic", Mimic.CephVersionFormatted())
+	assert.Equal(t, "ceph version 15.0.0-0 octopus", Octopus.CephVersionFormatted())
 }
 
 func TestReleaseName(t *testing.T) {
 	assert.Equal(t, "nautilus", Nautilus.ReleaseName())
-	assert.Equal(t, "mimic", Mimic.ReleaseName())
+	assert.Equal(t, "octopus", Octopus.ReleaseName())
 	ver := CephVersion{-1, 0, 0, 0}
 	assert.Equal(t, unknownVersionString, ver.ReleaseName())
 }
@@ -96,21 +97,18 @@ func TestSupported(t *testing.T) {
 	for _, v := range supportedVersions {
 		assert.True(t, v.Supported())
 	}
-	for _, v := range unsupportedVersions {
-		assert.False(t, v.Supported())
-	}
 }
 
 func TestIsRelease(t *testing.T) {
-	assert.True(t, Mimic.isRelease(Mimic))
 	assert.True(t, Nautilus.isRelease(Nautilus))
+	assert.True(t, Octopus.isRelease(Octopus))
 
-	assert.False(t, Mimic.isRelease(Nautilus))
+	assert.False(t, Octopus.isRelease(Nautilus))
 
-	MimicUpdate := Mimic
-	MimicUpdate.Minor = 33
-	MimicUpdate.Extra = 4
-	assert.True(t, MimicUpdate.isRelease(Mimic))
+	OctopusUpdate := Octopus
+	OctopusUpdate.Minor = 33
+	OctopusUpdate.Extra = 4
+	assert.True(t, OctopusUpdate.isRelease(Octopus))
 
 	NautilusUpdate := Nautilus
 	NautilusUpdate.Minor = 33
@@ -119,19 +117,13 @@ func TestIsRelease(t *testing.T) {
 }
 
 func TestIsReleaseX(t *testing.T) {
-	assert.True(t, Mimic.IsMimic())
-	assert.False(t, Nautilus.IsMimic())
-	assert.False(t, Octopus.IsMimic())
+	assert.True(t, Nautilus.IsNautilus())
+	assert.False(t, Octopus.IsNautilus())
 }
 
 func TestVersionAtLeast(t *testing.T) {
-	assert.True(t, Mimic.IsAtLeast(Mimic))
-	assert.False(t, Mimic.IsAtLeast(Nautilus))
-	assert.False(t, Mimic.IsAtLeast(Octopus))
-	assert.True(t, Nautilus.IsAtLeast(Mimic))
 	assert.True(t, Nautilus.IsAtLeast(Nautilus))
 	assert.False(t, Nautilus.IsAtLeast(Octopus))
-	assert.True(t, Octopus.IsAtLeast(Mimic))
 	assert.True(t, Octopus.IsAtLeast(Nautilus))
 	assert.True(t, Octopus.IsAtLeast(Octopus))
 
@@ -147,12 +139,10 @@ func TestVersionAtLeast(t *testing.T) {
 func TestVersionAtLeastX(t *testing.T) {
 	assert.True(t, Octopus.IsAtLeastOctopus())
 	assert.True(t, Octopus.IsAtLeastNautilus())
-	assert.True(t, Octopus.IsAtLeastMimic())
 	assert.True(t, Nautilus.IsAtLeastNautilus())
-	assert.True(t, Nautilus.IsAtLeastMimic())
-	assert.True(t, Mimic.IsAtLeastMimic())
-	assert.False(t, Mimic.IsAtLeastNautilus())
+	assert.True(t, Pacific.IsAtLeastPacific())
 	assert.False(t, Nautilus.IsAtLeastOctopus())
+	assert.False(t, Nautilus.IsAtLeastPacific())
 }
 
 func TestIsIdentical(t *testing.T) {
@@ -209,4 +199,37 @@ func TestValidateCephVersionsBetweenLocalAndExternalClusters(t *testing.T) {
 	externalCephVersion = CephVersion{Major: 14, Minor: 2, Extra: 2}
 	err = ValidateCephVersionsBetweenLocalAndExternalClusters(localCephVersion, externalCephVersion)
 	assert.NoError(t, err)
+}
+
+func TestCephVersion_Unsupported(t *testing.T) {
+	type fields struct {
+		Major int
+		Minor int
+		Extra int
+		Build int
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		want   bool
+	}{
+		{"supported", fields{Major: 14, Minor: 2, Extra: 1, Build: 0}, false},
+		{"supported", fields{Major: 14, Minor: 2, Extra: 12, Build: 0}, false},
+		{"supported", fields{Major: 15, Minor: 2, Extra: 1, Build: 0}, false},
+		{"supported", fields{Major: 15, Minor: 2, Extra: 6, Build: 0}, false},
+		{"unsupported", fields{Major: 14, Minor: 2, Extra: 13, Build: 0}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &CephVersion{
+				Major: tt.fields.Major,
+				Minor: tt.fields.Minor,
+				Extra: tt.fields.Extra,
+				Build: tt.fields.Build,
+			}
+			if got := v.Unsupported(); got != tt.want {
+				t.Errorf("CephVersion.Unsupported() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

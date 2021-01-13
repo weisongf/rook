@@ -18,6 +18,7 @@ limitations under the License.
 package agent
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -25,12 +26,13 @@ import (
 	"github.com/rook/rook/pkg/operator/test"
 	"github.com/stretchr/testify/assert"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestStartAgentDaemonset(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -55,17 +57,18 @@ func TestStartAgentDaemonset(t *testing.T) {
 			},
 		},
 	}
-	clientset.CoreV1().Pods("rook-system").Create(&pod)
+	_, err := clientset.CoreV1().Pods("rook-system").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	namespace := "ns"
 	a := New(clientset)
 
 	// start a basic cluster
-	err := a.Start(namespace, "rook/rook:myversion", "mysa")
+	err = a.Start(namespace, "rook/rook:myversion", "mysa")
 	assert.Nil(t, err)
 
 	// check daemonset parameters
-	agentDS, err := clientset.AppsV1().DaemonSets(namespace).Get("rook-ceph-agent", metav1.GetOptions{})
+	agentDS, err := clientset.AppsV1().DaemonSets(namespace).Get(ctx, "rook-ceph-agent", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.Equal(t, namespace, agentDS.Namespace)
 	assert.Equal(t, "rook-ceph-agent", agentDS.Name)
@@ -84,7 +87,8 @@ func TestStartAgentDaemonset(t *testing.T) {
 }
 
 func TestGetContainerImage(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "Default")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -106,7 +110,8 @@ func TestGetContainerImage(t *testing.T) {
 			},
 		},
 	}
-	clientset.CoreV1().Pods("Default").Create(&pod)
+	_, err := clientset.CoreV1().Pods("Default").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	// start a basic cluster
 	returnPod, err := k8sutil.GetRunningPod(clientset)
@@ -143,7 +148,8 @@ func TestGetContainerImageMultipleContainers(t *testing.T) {
 }
 
 func TestStartAgentDaemonsetWithToleration(t *testing.T) {
-	clientset := test.New(3)
+	ctx := context.TODO()
+	clientset := test.New(t, 3)
 
 	os.Setenv(k8sutil.PodNamespaceEnvVar, "rook-system")
 	defer os.Unsetenv(k8sutil.PodNamespaceEnvVar)
@@ -171,17 +177,18 @@ func TestStartAgentDaemonsetWithToleration(t *testing.T) {
 			},
 		},
 	}
-	clientset.CoreV1().Pods("rook-system").Create(&pod)
+	_, err := clientset.CoreV1().Pods("rook-system").Create(ctx, &pod, metav1.CreateOptions{})
+	assert.NoError(t, err)
 
 	namespace := "ns"
 	a := New(clientset)
 
 	// start a basic cluster
-	err := a.Start(namespace, "rook/test", "mysa")
+	err = a.Start(namespace, "rook/test", "mysa")
 	assert.Nil(t, err)
 
 	// check daemonset toleration
-	agentDS, err := clientset.AppsV1().DaemonSets(namespace).Get("rook-ceph-agent", metav1.GetOptions{})
+	agentDS, err := clientset.AppsV1().DaemonSets(namespace).Get(ctx, "rook-ceph-agent", metav1.GetOptions{})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(agentDS.Spec.Template.Spec.Tolerations))
 	assert.Equal(t, "mysa", agentDS.Spec.Template.Spec.ServiceAccountName)

@@ -17,6 +17,8 @@ limitations under the License.
 package yugabytedb
 
 import (
+	"context"
+
 	yugabytedbv1alpha1 "github.com/rook/rook/pkg/apis/yugabytedb.rook.io/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -25,8 +27,15 @@ import (
 
 func (c *ClusterController) OnUpdate(oldObj, newObj interface{}) {
 	// TODO Create the cluster if previous attempt to create has failed.
-	_ = oldObj.(*yugabytedbv1alpha1.YBCluster).DeepCopy()
-	newObjCluster := newObj.(*yugabytedbv1alpha1.YBCluster).DeepCopy()
+	oldYBCluster, ok := oldObj.(*yugabytedbv1alpha1.YBCluster)
+	if !ok {
+		return
+	}
+	_ = oldYBCluster.DeepCopy()
+	newObjCluster, ok := newObj.(*yugabytedbv1alpha1.YBCluster)
+	if !ok {
+		return
+	}
 	newYBCluster := NewCluster(newObjCluster, c.context)
 
 	// Validate new spec
@@ -80,6 +89,7 @@ func (c *ClusterController) updateTServerHeadlessService(newCluster *cluster) er
 }
 
 func (c *ClusterController) updateHeadlessService(newCluster *cluster, isTServerService bool) error {
+	ctx := context.TODO()
 	serviceName := masterNamePlural
 
 	if isTServerService {
@@ -88,7 +98,7 @@ func (c *ClusterController) updateHeadlessService(newCluster *cluster, isTServer
 
 	serviceName = newCluster.addCRNameSuffix(serviceName)
 
-	service, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Get(serviceName, metav1.GetOptions{})
+	service, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Get(ctx, serviceName, metav1.GetOptions{})
 
 	if err != nil {
 		return err
@@ -96,7 +106,7 @@ func (c *ClusterController) updateHeadlessService(newCluster *cluster, isTServer
 
 	service.Spec.Ports = createServicePorts(newCluster, isTServerService)
 
-	if _, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Update(service); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Update(ctx, service, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 
@@ -115,6 +125,7 @@ func (c *ClusterController) updateTServerUIService(newCluster *cluster) error {
 }
 
 func (c *ClusterController) updateUIService(newCluster *cluster, isTServerService bool) error {
+	ctx := context.TODO()
 	ports, err := getPortsFromSpec(newCluster.spec.Master.Network)
 	if err != nil {
 		return err
@@ -133,7 +144,7 @@ func (c *ClusterController) updateUIService(newCluster *cluster, isTServerServic
 
 	serviceName = newCluster.addCRNameSuffix(serviceName)
 
-	service, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Get(serviceName, metav1.GetOptions{})
+	service, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Get(ctx, serviceName, metav1.GetOptions{})
 
 	if err != nil {
 		// Create TServer UI Service, if it wasn't present & new spec needs one.
@@ -153,7 +164,7 @@ func (c *ClusterController) updateUIService(newCluster *cluster, isTServerServic
 
 	// Delete the TServer UI service if existed, but new spec doesn't need one.
 	if isTServerService && service != nil && ports.tserverPorts.ui <= 0 {
-		if err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Delete(serviceName, &metav1.DeleteOptions{}); err != nil {
+		if err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Delete(ctx, serviceName, metav1.DeleteOptions{}); err != nil {
 			return err
 		}
 
@@ -165,7 +176,7 @@ func (c *ClusterController) updateUIService(newCluster *cluster, isTServerServic
 	// Update the UI service for Master or TServer, otherwise.
 	service.Spec.Ports = createUIServicePorts(ports, isTServerService)
 
-	if _, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Update(service); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(newCluster.namespace).Update(ctx, service, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 
@@ -183,6 +194,7 @@ func (c *ClusterController) updateTServerStatefulset(newCluster *cluster) error 
 }
 
 func (c *ClusterController) updateStatefulSet(newCluster *cluster, isTServerStatefulset bool) error {
+	ctx := context.TODO()
 	ports, err := getPortsFromSpec(newCluster.spec.Master.Network)
 
 	if err != nil {
@@ -192,10 +204,12 @@ func (c *ClusterController) updateStatefulSet(newCluster *cluster, isTServerStat
 	replicas := int32(newCluster.spec.Master.Replicas)
 	sfsName := newCluster.addCRNameSuffix(masterName)
 	masterServiceName := newCluster.addCRNameSuffix(masterNamePlural)
+	masterCompleteName := newCluster.addCRNameSuffix(masterName)
 	vct := *newCluster.spec.Master.VolumeClaimTemplate.DeepCopy()
 	vct.Name = newCluster.addCRNameSuffix(vct.Name)
 	volumeClaimTemplates := []v1.PersistentVolumeClaim{vct}
-	command := createMasterContainerCommand(newCluster.namespace, masterServiceName, ports.masterPorts.rpc, newCluster.spec.Master.Replicas)
+	resources := getResourceSpec(newCluster.spec.Master.Resource, isTServerStatefulset)
+	command := createMasterContainerCommand(newCluster.namespace, masterServiceName, masterCompleteName, ports.masterPorts.rpc, newCluster.spec.Master.Replicas, resources)
 	containerPorts := createMasterContainerPortsList(ports)
 
 	if isTServerStatefulset {
@@ -209,16 +223,18 @@ func (c *ClusterController) updateStatefulSet(newCluster *cluster, isTServerStat
 		replicas = int32(newCluster.spec.TServer.Replicas)
 		sfsName = newCluster.addCRNameSuffix(tserverName)
 		masterServiceName = newCluster.addCRNameSuffix(masterNamePlural)
+		masterCompleteName := newCluster.addCRNameSuffix(masterName)
 		tserverServiceName := newCluster.addCRNameSuffix(tserverNamePlural)
 		vct = *newCluster.spec.TServer.VolumeClaimTemplate.DeepCopy()
 		vct.Name = newCluster.addCRNameSuffix(vct.Name)
 		volumeClaimTemplates = []v1.PersistentVolumeClaim{vct}
-		command = createTServerContainerCommand(newCluster.namespace, tserverServiceName, masterServiceName,
-			masterRPCPort, ports.tserverPorts.rpc, ports.tserverPorts.postgres, newCluster.spec.TServer.Replicas)
+		resources = getResourceSpec(newCluster.spec.Master.Resource, isTServerStatefulset)
+		command = createTServerContainerCommand(newCluster.namespace, tserverServiceName, masterServiceName, masterCompleteName,
+			masterRPCPort, ports.tserverPorts.rpc, ports.tserverPorts.postgres, newCluster.spec.TServer.Replicas, resources)
 		containerPorts = createTServerContainerPortsList(ports)
 	}
 
-	sfs, err := c.context.Clientset.AppsV1().StatefulSets(newCluster.namespace).Get(sfsName, metav1.GetOptions{})
+	sfs, err := c.context.Clientset.AppsV1().StatefulSets(newCluster.namespace).Get(ctx, sfsName, metav1.GetOptions{})
 
 	if err != nil {
 		return err
@@ -226,11 +242,12 @@ func (c *ClusterController) updateStatefulSet(newCluster *cluster, isTServerStat
 
 	sfs.Spec.Replicas = &replicas
 	sfs.Spec.Template.Spec.Containers[0].Command = command
+	sfs.Spec.Template.Spec.Containers[0].Resources = resources
 	sfs.Spec.Template.Spec.Containers[0].Ports = containerPorts
 	sfs.Spec.Template.Spec.Containers[0].VolumeMounts[0].Name = vct.Name
 	sfs.Spec.VolumeClaimTemplates = volumeClaimTemplates
 
-	if _, err := c.context.Clientset.AppsV1().StatefulSets(newCluster.namespace).Update(sfs); err != nil {
+	if _, err := c.context.Clientset.AppsV1().StatefulSets(newCluster.namespace).Update(ctx, sfs, metav1.UpdateOptions{}); err != nil {
 		return err
 	}
 

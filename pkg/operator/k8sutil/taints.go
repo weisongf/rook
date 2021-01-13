@@ -18,7 +18,7 @@ package k8sutil
 
 import (
 	v1 "k8s.io/api/core/v1"
-	scheduler "k8s.io/kubernetes/pkg/scheduler/api"
+	cloudproviderapi "k8s.io/cloud-provider/api"
 )
 
 // WellKnownTaints is a list of well-known taint keys in the Kubernetes code base. Kubernetes may
@@ -29,15 +29,15 @@ import (
 // see: https://github.com/kubernetes/kubernetes/blob/master/pkg/scheduler/api/well_known_labels.go
 // and: https://kubernetes.io/docs/concepts/configuration/taint-and-toleration/#taint-based-evictions
 var WellKnownTaints = []string{
-	scheduler.TaintNodeNotReady,    // NoExecute
-	scheduler.TaintNodeUnreachable, // NoExecute
-	scheduler.TaintNodeUnschedulable,
-	scheduler.TaintNodeMemoryPressure,
-	scheduler.TaintNodeDiskPressure,
-	scheduler.TaintNodeNetworkUnavailable,
-	scheduler.TaintNodePIDPressure,
-	scheduler.TaintExternalCloudProvider,
-	scheduler.TaintNodeShutdown,
+	v1.TaintNodeNotReady,    // NoExecute
+	v1.TaintNodeUnreachable, // NoExecute
+	v1.TaintNodeUnschedulable,
+	v1.TaintNodeMemoryPressure,
+	v1.TaintNodeDiskPressure,
+	v1.TaintNodeNetworkUnavailable,
+	v1.TaintNodePIDPressure,
+	cloudproviderapi.TaintExternalCloudProvider,
+	cloudproviderapi.TaintNodeShutdown,
 }
 
 // TaintIsWellKnown returns true if the taint's key is in the WellKnownTaints list. False otherwise.

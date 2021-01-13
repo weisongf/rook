@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 )
 
 // override these for unit testing
@@ -35,6 +36,7 @@ func CopyBinaries(target string) error {
 	return copyBinary(defaultTiniDir, target, "tini")
 }
 
+// #nosec G307 Calling defer to close the file without checking the error return is not a risk for a simple file open and close
 func copyBinary(sourceDir, targetDir, filename string) error {
 	sourcePath := path.Join(sourceDir, filename)
 	targetPath := path.Join(targetDir, filename)
@@ -52,13 +54,13 @@ func copyBinary(sourceDir, targetDir, filename string) error {
 		return nil
 	}
 
-	sourceFile, err := os.Open(sourcePath)
+	sourceFile, err := os.Open(filepath.Clean(sourcePath))
 	if err != nil {
 		return err
 	}
 	defer sourceFile.Close()
 
-	destinationFile, err := os.Create(targetPath)
+	destinationFile, err := os.Create(filepath.Clean(targetPath))
 	if err != nil {
 		return err
 	}
@@ -66,6 +68,9 @@ func copyBinary(sourceDir, targetDir, filename string) error {
 	if _, err := io.Copy(destinationFile, sourceFile); err != nil {
 		return err
 	}
-
-	return os.Chmod(targetPath, 0755)
+	if err := destinationFile.Close(); err != nil {
+		return err
+	}
+	// #nosec targetPath requires the permission to execute
+	return os.Chmod(targetPath, 0700)
 }

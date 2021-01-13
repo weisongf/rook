@@ -18,6 +18,7 @@ limitations under the License.
 package isgw
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -36,15 +37,14 @@ const (
 	appName = "rook-edgefs-isgw"
 
 	/* ISGW definitions */
-	serviceAccountName      = "rook-edgefs-cluster"
-	defaultReplicationType  = "initial+continuous"
-	defaultDynamicFetchPort = 49678
-	defaultLocalIPAddr      = "0.0.0.0"
-	defaultLocalIPv6Addr    = "::"
-	defaultLocalPort        = 14000
-	dataVolumeName          = "edgefs-datadir"
-	stateVolumeFolder       = ".state"
-	etcVolumeFolder         = ".etc"
+	serviceAccountName     = "rook-edgefs-cluster"
+	defaultReplicationType = "initial+continuous"
+	defaultLocalIPAddr     = "0.0.0.0"
+	defaultLocalIPv6Addr   = "::"
+	defaultLocalPort       = 14000
+	dataVolumeName         = "edgefs-datadir"
+	stateVolumeFolder      = ".state"
+	etcVolumeFolder        = ".etc"
 )
 
 // Start the ISGW manager
@@ -58,6 +58,7 @@ func (c *ISGWController) UpdateService(s edgefsv1.ISGW, ownerRefs []metav1.Owner
 
 // Start the isgw instance
 func (c *ISGWController) CreateOrUpdate(s edgefsv1.ISGW, update bool, ownerRefs []metav1.OwnerReference) error {
+	ctx := context.TODO()
 	logger.Infof("starting update=%v service=%s", update, s.Name)
 
 	logger.Infof("ISGW Base image is %s", c.rookImage)
@@ -84,7 +85,7 @@ func (c *ISGWController) CreateOrUpdate(s edgefsv1.ISGW, update bool, ownerRefs 
 	}
 
 	// check if ISGW service already exists
-	exists, err := serviceExists(c.context, s)
+	exists, err := serviceExists(ctx, c.context, s)
 	if err == nil && exists {
 		if !update {
 			logger.Infof("ISGW service %s exists in namespace %s", s.Name, s.Namespace)
@@ -95,12 +96,12 @@ func (c *ISGWController) CreateOrUpdate(s edgefsv1.ISGW, update bool, ownerRefs 
 
 	// start the deployment
 	deployment := c.makeDeployment(s.Name, s.Namespace, c.rookImage, s.Spec)
-	if _, err := c.context.Clientset.AppsV1().Deployments(s.Namespace).Create(deployment); err != nil {
+	if _, err := c.context.Clientset.AppsV1().Deployments(s.Namespace).Create(ctx, deployment, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create %s deployment. %+v", appName, err)
 		}
 		logger.Infof("%s deployment already exists", appName)
-		if _, err := c.context.Clientset.AppsV1().Deployments(s.Namespace).Update(deployment); err != nil {
+		if _, err := c.context.Clientset.AppsV1().Deployments(s.Namespace).Update(ctx, deployment, metav1.UpdateOptions{}); err != nil {
 			return fmt.Errorf("failed to update %s deployment. %+v", appName, err)
 		}
 		logger.Infof("%s deployment updated", appName)
@@ -110,7 +111,7 @@ func (c *ISGWController) CreateOrUpdate(s edgefsv1.ISGW, update bool, ownerRefs 
 
 	// create the isgw service
 	service := c.makeISGWService(instanceName(s.Name), s.Name, s.Namespace, s.Spec)
-	if _, err := c.context.Clientset.CoreV1().Services(s.Namespace).Create(service); err != nil {
+	if _, err := c.context.Clientset.CoreV1().Services(s.Namespace).Create(ctx, service, metav1.CreateOptions{}); err != nil {
 		if !errors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create ISGW service. %+v", err)
 		}
@@ -169,6 +170,7 @@ func (c *ISGWController) makeISGWService(name, svcname, namespace string, isgwSp
 			logger.Errorf("wrong localAddr format")
 			return svc
 		}
+		// #nosec G109 using Atoi to convert type into int is not a real risk
 		lport, _ := strconv.Atoi(port)
 		lportServicePort := v1.ServicePort{Name: "lport", Port: int32(lport), Protocol: v1.ProtocolTCP}
 		if isgwSpec.ExternalPort != 0 {
@@ -187,6 +189,7 @@ func (c *ISGWController) makeISGWService(name, svcname, namespace string, isgwSp
 			logger.Errorf("wrong dynamicFetchAddr format")
 			return svc
 		}
+		// #nosec G109 using Atoi to convert type into int is not a real risk
 		lport, _ := strconv.Atoi(port)
 
 		svc.Spec.Ports = append(svc.Spec.Ports, v1.ServicePort{Name: "dfport", Port: int32(lport), Protocol: v1.ProtocolTCP})
@@ -202,6 +205,7 @@ func (c *ISGWController) makeDeployment(svcname, namespace, rookImage string, is
 
 	if c.useHostLocalTime {
 		volumes = append(volumes, edgefsv1.GetHostLocalTimeVolume())
+		volumes = append(volumes, edgefsv1.GetHostTimeZoneVolume())
 	}
 
 	if c.dataVolumeSize.Value() > 0 {
@@ -280,7 +284,7 @@ func (c *ISGWController) isgwContainer(svcname, name, containerImage string, isg
 
 	direction := getDirection(isgwSpec)
 
-	replication := 3
+	var replication int
 	if isgwSpec.ReplicationType == "initial" {
 		replication = 1
 	} else if isgwSpec.ReplicationType == "continuous" {
@@ -311,6 +315,7 @@ func (c *ISGWController) isgwContainer(svcname, name, containerImage string, isg
 
 	if c.useHostLocalTime {
 		volumeMounts = append(volumeMounts, edgefsv1.GetHostLocalTimeVolumeMount())
+		volumeMounts = append(volumeMounts, edgefsv1.GetHostTimeZoneVolumeMount())
 	}
 
 	configJSON := getISGWConfigJSON(isgwSpec)
@@ -392,6 +397,7 @@ func (c *ISGWController) isgwContainer(svcname, name, containerImage string, isg
 			logger.Errorf("wrong localAddr format")
 			return cont
 		}
+		// #nosec G109 using Atoi to convert type into int is not a real risk
 		lport, _ := strconv.Atoi(port)
 		cont.Ports = append(cont.Ports, v1.ContainerPort{Name: "lport", ContainerPort: int32(lport), Protocol: v1.ProtocolTCP})
 	}
@@ -401,6 +407,7 @@ func (c *ISGWController) isgwContainer(svcname, name, containerImage string, isg
 			logger.Errorf("wrong dynamicFetchAddr format")
 			return cont
 		}
+		// #nosec G109 using Atoi to convert type into int is not a real risk
 		lport, _ := strconv.Atoi(port)
 		cont.Ports = append(cont.Ports, v1.ContainerPort{Name: "dfport", ContainerPort: int32(lport), Protocol: v1.ProtocolTCP})
 	}
@@ -414,8 +421,9 @@ func (c *ISGWController) isgwContainer(svcname, name, containerImage string, isg
 
 // Delete ISGW service and possibly some artifacts.
 func (c *ISGWController) DeleteService(s edgefsv1.ISGW) error {
+	ctx := context.TODO()
 	// check if service  exists
-	exists, err := serviceExists(c.context, s)
+	exists, err := serviceExists(ctx, c.context, s)
 	if err != nil {
 		return fmt.Errorf("failed to detect if there is a ISGW service to delete. %+v", err)
 	}
@@ -431,7 +439,7 @@ func (c *ISGWController) DeleteService(s edgefsv1.ISGW) error {
 	options := &metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod, PropagationPolicy: &propagation}
 
 	// Delete the isgw service
-	err = c.context.Clientset.CoreV1().Services(s.Namespace).Delete(instanceName(s.Name), options)
+	err = c.context.Clientset.CoreV1().Services(s.Namespace).Delete(ctx, instanceName(s.Name), *options)
 	if err != nil && !errors.IsNotFound(err) {
 		logger.Warningf("failed to delete ISGW service. %+v", err)
 	}
@@ -472,8 +480,8 @@ func instanceName(svcname string) string {
 }
 
 // Check if the ISGW service exists
-func serviceExists(context *clusterd.Context, s edgefsv1.ISGW) (bool, error) {
-	_, err := context.Clientset.AppsV1().Deployments(s.Namespace).Get(instanceName(s.Name), metav1.GetOptions{})
+func serviceExists(ctx context.Context, context *clusterd.Context, s edgefsv1.ISGW) (bool, error) {
+	_, err := context.Clientset.AppsV1().Deployments(s.Namespace).Get(ctx, instanceName(s.Name), metav1.GetOptions{})
 	if err == nil {
 		// the deployment was found
 		return true, nil

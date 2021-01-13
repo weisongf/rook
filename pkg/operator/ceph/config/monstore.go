@@ -17,6 +17,9 @@ limitations under the License.
 package config
 
 import (
+	"encoding/json"
+	"strings"
+
 	"github.com/pkg/errors"
 	"github.com/rook/rook/pkg/clusterd"
 	"github.com/rook/rook/pkg/daemon/ceph/client"
@@ -25,15 +28,15 @@ import (
 // MonStore provides methods for setting Ceph configurations in the centralized mon
 // configuration database.
 type MonStore struct {
-	context   *clusterd.Context
-	namespace string
+	context     *clusterd.Context
+	clusterInfo *client.ClusterInfo
 }
 
 // GetMonStore returns a new MonStore for the cluster.
-func GetMonStore(context *clusterd.Context, namespace string) *MonStore {
+func GetMonStore(context *clusterd.Context, clusterInfo *client.ClusterInfo) *MonStore {
 	return &MonStore{
-		context:   context,
-		namespace: namespace,
+		context:     context,
+		clusterInfo: clusterInfo,
 	}
 }
 
@@ -53,11 +56,76 @@ type Option struct {
 // https://docs.ceph.com/docs/master/rados/configuration/ceph-conf/#monitor-configuration-database
 func (m *MonStore) Set(who, option, value string) error {
 	args := []string{"config", "set", who, normalizeKey(option), value}
-	cephCmd := client.NewCephCommand(m.context, m.namespace, args)
+	cephCmd := client.NewCephCommand(m.context, m.clusterInfo, args)
 	out, err := cephCmd.Run()
 	if err != nil {
 		return errors.Wrapf(err, "failed to set ceph config in the centralized mon configuration database; "+
 			"you may need to use the rook-config-override ConfigMap. output: %s", string(out))
+	}
+	return nil
+}
+
+// Delete a config in the centralized mon configuration database.
+func (m *MonStore) Delete(who, option string) error {
+	args := []string{"config", "rm", who, normalizeKey(option)}
+	cephCmd := client.NewCephCommand(m.context, m.clusterInfo, args)
+	out, err := cephCmd.Run()
+	if err != nil {
+		return errors.Wrapf(err, "failed to delete ceph config in the centralized mon configuration database. output: %s",
+			string(out))
+	}
+	return nil
+}
+
+// Get retrieves a config in the centralized mon configuration database.
+// https://docs.ceph.com/docs/master/rados/configuration/ceph-conf/#monitor-configuration-database
+func (m *MonStore) Get(who, option string) (string, error) {
+	args := []string{"config", "get", who, normalizeKey(option)}
+	cephCmd := client.NewCephCommand(m.context, m.clusterInfo, args)
+	out, err := cephCmd.Run()
+	if err != nil {
+		return "", errors.Wrapf(err, "failed to get config setting %q for user %q", option, who)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// GetDaemon retrieves all configs for a specific daemon in the centralized mon configuration database.
+func (m *MonStore) GetDaemon(who string) ([]Option, error) {
+	args := []string{"config", "get", who}
+	cephCmd := client.NewCephCommand(m.context, m.clusterInfo, args)
+	out, err := cephCmd.Run()
+	if err != nil {
+		return []Option{}, errors.Wrapf(err, "failed to get config for daemon %q. output: %s", who, string(out))
+	}
+	var result map[string]interface{}
+	err = json.Unmarshal(out, &result)
+	if err != nil {
+		return []Option{}, errors.Wrapf(err, "failed to parse json config for daemon %q. json: %s", who, string(out))
+	}
+	daemonOptions := []Option{}
+	for k := range result {
+		v := result[k].(map[string]interface{})
+		optionWho := v["section"].(string)
+		// Only get specialized options (don't take global one)
+		if optionWho == who {
+			daemonOptions = append(daemonOptions, Option{optionWho, k, v["value"].(string)})
+		}
+	}
+	return daemonOptions, nil
+}
+
+// DeleteDaemon delete all configs for a specific daemon in the centralized mon configuration database.
+func (m *MonStore) DeleteDaemon(who string) error {
+	configOptions, err := m.GetDaemon(who)
+	if err != nil {
+		return errors.Wrapf(err, "failed to get daemon config for %q", who)
+	}
+
+	for _, option := range configOptions {
+		err := m.Delete(who, option.Option)
+		if err != nil {
+			return errors.Wrapf(err, "failed to delete option %q on %q", option.Option, who)
+		}
 	}
 	return nil
 }

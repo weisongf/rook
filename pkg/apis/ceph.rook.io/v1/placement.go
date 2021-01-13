@@ -16,25 +16,32 @@ limitations under the License.
 package v1
 
 import (
-	rook "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 )
 
 // GetMgrPlacement returns the placement for the MGR service
-func GetMgrPlacement(p rook.PlacementSpec) rook.Placement {
+func GetMgrPlacement(p rookv1.PlacementSpec) rookv1.Placement {
 	return p.All().Merge(p[KeyMgr])
 }
 
 // GetMonPlacement returns the placement for the MON service
-func GetMonPlacement(p rook.PlacementSpec) rook.Placement {
+func GetMonPlacement(p rookv1.PlacementSpec) rookv1.Placement {
 	return p.All().Merge(p[KeyMon])
 }
 
+// GetArbiterPlacement returns the placement for the arbiter MON service
+func GetArbiterPlacement(p rookv1.PlacementSpec) rookv1.Placement {
+	// If the mon is the arbiter in a stretch cluster and its placement is specified, return it
+	// without merging with the "all" placement so it can be handled separately from all other daemons
+	return p[KeyMonArbiter]
+}
+
 // GetOSDPlacement returns the placement for the OSD service
-func GetOSDPlacement(p rook.PlacementSpec) rook.Placement {
+func GetOSDPlacement(p rookv1.PlacementSpec) rookv1.Placement {
 	return p.All().Merge(p[KeyOSD])
 }
 
-// GetRBDMirrorPlacement returns the placement for the RBD mirrors
-func GetRBDMirrorPlacement(p rook.PlacementSpec) rook.Placement {
-	return p.All().Merge(p[KeyRBDMirror])
+// GetCleanupPlacement returns the placement the cleanup job
+func GetCleanupPlacement(p rookv1.PlacementSpec) rookv1.Placement {
+	return p.All().Merge(p[KeyCleanup])
 }

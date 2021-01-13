@@ -20,7 +20,11 @@ function wait_for_ssh() {
 function copy_image_to_cluster() {
     local build_image=$1
     local final_image=$2
-    docker save "${build_image}" | (eval "$(minikube docker-env --shell bash)" && docker load && docker tag "${build_image}" "${final_image}")
+    local docker_env_tag="${DOCKERCMD}-env"
+    ${DOCKERCMD} save "${build_image}" | \
+        (eval "$(minikube ${docker_env_tag} --shell bash)" && \
+        ${DOCKERCMD} load && \
+        ${DOCKERCMD} tag "${build_image}" "${final_image}")
 }
 
 function copy_images() {
@@ -28,7 +32,7 @@ function copy_images() {
       echo "copying ceph images"
       copy_image_to_cluster "${BUILD_REGISTRY}/ceph-amd64" rook/ceph:master
       # uncomment to push the nautilus image when needed
-      #copy_image_to_cluster ceph/ceph:v14 ceph/ceph:v14
+      #copy_image_to_cluster ceph/ceph:v15 ceph/ceph:v15
     fi
 
     if [[ "$1" == "" || "$1" == "cockroachdb" ]]; then
@@ -39,11 +43,6 @@ function copy_images() {
     if [[ "$1" == "" || "$1" == "cassandra" ]]; then
       echo "copying cassandra image"
       copy_image_to_cluster "${BUILD_REGISTRY}/cassandra-amd64" rook/cassandra:master
-    fi
-
-    if [[ "$1" == "" || "$1" == "minio" ]]; then
-      echo "copying minio image"
-      copy_image_to_cluster "${BUILD_REGISTRY}/minio-amd64" rook/minio:master
     fi
 
     if [[ "$1" == "" || "$1" == "nfs" ]]; then
@@ -61,7 +60,7 @@ function copy_images() {
 MEMORY=${MEMORY:-"3000"}
 
 # use vda1 instead of sda1 when running with the libvirt driver
-VM_DRIVER=$(minikube config get vm-driver 2>/dev/null || echo "virtualbox")
+VM_DRIVER=$(minikube config get driver 2>/dev/null || echo "virtualbox")
 if [[ "$VM_DRIVER" == "kvm2" ]]; then
   DISK="vda1"
 else
@@ -100,18 +99,17 @@ case "${1:-}" in
     echo " copying rook image for helm"
     helm_tag="$(cat _output/version)"
     copy_image_to_cluster "${BUILD_REGISTRY}/ceph-amd64" "rook/ceph:${helm_tag}"
-    copy_image_to_cluster "${BUILD_REGISTRY}/minio-amd64" "rook/minio:${helm_tag}"
     ;;
   clean)
     minikube delete
     ;;
   *)
     echo "usage:" >&2
-    echo "  $0 up [ceph | cockroachdb | cassandra | minio | nfs | yugabytedb]" >&2
+    echo "  $0 up [ceph | cockroachdb | cassandra | nfs | yugabytedb]" >&2
     echo "  $0 down" >&2
     echo "  $0 clean" >&2
     echo "  $0 ssh" >&2
-    echo "  $0 update [ceph | cockroachdb | cassandra | minio | nfs | yugabytedb]" >&2
+    echo "  $0 update [ceph | cockroachdb | cassandra | nfs | yugabytedb]" >&2
     echo "  $0 wordpress" >&2
     echo "  $0 cockroachdb-loadgen" >&2
     echo "  $0 helm" >&2

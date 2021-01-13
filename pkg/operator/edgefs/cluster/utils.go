@@ -16,6 +16,7 @@ limitations under the License.
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,7 +25,7 @@ import (
 	"time"
 
 	edgefsv1 "github.com/rook/rook/pkg/apis/edgefs.rook.io/v1"
-	rookv1alpha2 "github.com/rook/rook/pkg/apis/rook.io/v1alpha2"
+	rookv1 "github.com/rook/rook/pkg/apis/rook.io/v1"
 	"github.com/rook/rook/pkg/operator/discover"
 	"github.com/rook/rook/pkg/operator/k8sutil"
 	v1 "k8s.io/api/core/v1"
@@ -59,16 +60,13 @@ func ParseDevicesResurrectMode(resurrectMode string) edgefsv1.DevicesResurrectOp
 	switch resurrectModeToLower {
 	case "restore":
 		drm.NeedToResurrect = true
-		break
 	case "restorezap":
 		drm.NeedToResurrect = true
 		drm.NeedToZap = true
-		break
 	case "restorezapwait":
 		drm.NeedToResurrect = true
 		drm.NeedToZap = true
 		drm.NeedToWait = true
-		break
 	}
 
 	return drm
@@ -84,7 +82,7 @@ func ToJSON(obj interface{}) string {
 	return string(bytes)
 }
 
-func (c *cluster) getClusterNodes() ([]rookv1alpha2.Node, error) {
+func (c *cluster) getClusterNodes() ([]rookv1.Node, error) {
 	if c.Spec.Storage.UseAllNodes {
 		c.Spec.Storage.Nodes = nil
 		// Resolve all storage nodes
@@ -95,7 +93,7 @@ func (c *cluster) getClusterNodes() ([]rookv1alpha2.Node, error) {
 			return nil, err
 		}
 		for nodeName := range allNodeDevices {
-			storageNode := rookv1alpha2.Node{
+			storageNode := rookv1.Node{
 				Name: nodeName,
 			}
 			c.Spec.Storage.Nodes = append(c.Spec.Storage.Nodes, storageNode)
@@ -109,12 +107,12 @@ func (c *cluster) getClusterNodes() ([]rookv1alpha2.Node, error) {
 
 // retrieveDeploymentConfig restore ClusterDeploymentConfig from cluster's Kubernetes ConfigMap
 func (c *cluster) retrieveDeploymentConfig() (edgefsv1.ClusterDeploymentConfig, error) {
-
+	ctx := context.TODO()
 	deploymentConfig := edgefsv1.ClusterDeploymentConfig{
-		DevConfig: make(map[string]edgefsv1.DevicesConfig, 0),
+		DevConfig: make(map[string]edgefsv1.DevicesConfig),
 	}
 
-	cm, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Get(configName, metav1.GetOptions{})
+	cm, err := c.context.Clientset.CoreV1().ConfigMaps(c.Namespace).Get(ctx, configName, metav1.GetOptions{})
 	if err != nil {
 		if apierrs.IsNotFound(err) {
 			// When cluster config map doesn't exist, return config with empty DevicesConfig and current DeploymentType
@@ -254,7 +252,7 @@ func (c *cluster) PrintDeploymentConfig(deploymentConfig *edgefsv1.ClusterDeploy
 	}
 }
 
-func (c *cluster) resolveNode(nodeName string) *rookv1alpha2.Node {
+func (c *cluster) resolveNode(nodeName string) *rookv1.Node {
 	// Fully resolve the storage config and resources for this node
 	rookNode := c.Spec.Storage.ResolveNode(nodeName)
 	if rookNode == nil {
@@ -267,7 +265,7 @@ func (c *cluster) resolveNode(nodeName string) *rookv1alpha2.Node {
 	rookNode.Resources = k8sutil.MergeResourceRequirements(rookNode.Resources, c.Spec.Resources)
 
 	// Ensure no invalid dirs are specified
-	var validDirs []rookv1alpha2.Directory
+	var validDirs []rookv1.Directory
 	for _, dir := range rookNode.Directories {
 		if dir.Path == k8sutil.DataDir || dir.Path == c.Spec.DataDirHostPath {
 			logger.Warningf("skipping directory %s that would conflict with the dataDirHostPath", dir.Path)
@@ -281,19 +279,23 @@ func (c *cluster) resolveNode(nodeName string) *rookv1alpha2.Node {
 }
 
 func (c *cluster) LabelTargetNode(nodeName string) {
-	c.AddLabelsToNode(nodeName, map[string]string{c.Namespace: "cluster"})
+	if err := c.AddLabelsToNode(nodeName, map[string]string{c.Namespace: "cluster"}); err != nil {
+		logger.Errorf("failed to add labels to node %q. %v", nodeName, err)
+	}
 }
 
 func (c *cluster) AddLabelsToNode(nodeName string, labels map[string]string) error {
+	ctx := context.TODO()
 	tokens := make([]string, 0, len(labels))
 	for k, v := range labels {
-		tokens = append(tokens, "\""+k+"\":\""+v+"\"")
+		tokens = append(tokens, fmt.Sprintf(`"%s":"%s"`, k, v))
 	}
-	labelString := "{" + strings.Join(tokens, ",") + "}"
+	labelString := fmt.Sprintf("{%s}", strings.Join(tokens, ","))
+	// Sprintf formatting is safe as user input isn't being used. Issue https://github.com/rook/rook/issues/4575
 	patch := fmt.Sprintf(`{"metadata":{"labels":%v}}`, labelString)
 	var err error
 	for attempt := 0; attempt < labelingRetries; attempt++ {
-		_, err = c.context.Clientset.CoreV1().Nodes().Patch(nodeName, types.MergePatchType, []byte(patch))
+		_, err = c.context.Clientset.CoreV1().Nodes().Patch(ctx, nodeName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 		if err != nil {
 			if !apierrs.IsConflict(err) {
 				return err
@@ -307,16 +309,19 @@ func (c *cluster) AddLabelsToNode(nodeName string, labels map[string]string) err
 }
 
 func (c *cluster) UnlabelTargetNode(nodeName string) {
-	c.RemoveLabelOffNode(nodeName, []string{c.Namespace})
+	if err := c.RemoveLabelOffNode(nodeName, []string{c.Namespace}); err != nil {
+		logger.Errorf("failed to remove labels from node %q. %v", nodeName, err)
+	}
 }
 
 // RemoveLabelOffNode is for cleaning up labels temporarily added to node,
 // won't fail if target label doesn't exist or has been removed.
 func (c *cluster) RemoveLabelOffNode(nodeName string, labelKeys []string) error {
+	ctx := context.TODO()
 	var node *v1.Node
 	var err error
 	for attempt := 0; attempt < labelingRetries; attempt++ {
-		node, err = c.context.Clientset.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+		node, err = c.context.Clientset.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
@@ -329,7 +334,7 @@ func (c *cluster) RemoveLabelOffNode(nodeName string, labelKeys []string) error 
 			}
 			delete(node.Labels, labelKey)
 		}
-		_, err = c.context.Clientset.CoreV1().Nodes().Update(node)
+		_, err = c.context.Clientset.CoreV1().Nodes().Update(ctx, node, metav1.UpdateOptions{})
 		if err != nil {
 			if !apierrs.IsConflict(err) {
 				return err
@@ -360,7 +365,8 @@ func (c *cluster) isGatewayLabeledNode(cs clientset.Interface, nodeName string) 
 }
 
 func (c *cluster) getNodeLabels(cs clientset.Interface, nodeName string) (map[string]string, error) {
-	node, err := cs.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{})
+	ctx := context.TODO()
+	node, err := cs.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}

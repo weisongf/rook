@@ -229,20 +229,34 @@ const testCrushMap = `{
 
 func TestGetCrushMap(t *testing.T) {
 	executor := &exectest.MockExecutor{}
-	executor.MockExecuteCommandWithOutputFile = func(debug bool, actionName, command, outputFile string, args ...string) (string, error) {
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
 		logger.Infof("Command: %s %v", command, args)
 		if args[1] == "crush" && args[2] == "dump" {
 			return testCrushMap, nil
 		}
 		return "", errors.Errorf("unexpected ceph command '%v'", args)
 	}
-	crush, err := GetCrushMap(&clusterd.Context{Executor: executor}, "rook")
+	crush, err := GetCrushMap(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"))
 
 	assert.Nil(t, err)
 	assert.Equal(t, 11, len(crush.Types))
 	assert.Equal(t, 1, len(crush.Devices))
 	assert.Equal(t, 4, len(crush.Buckets))
 	assert.Equal(t, 2, len(crush.Rules))
+}
+
+func TestGetOSDOnHost(t *testing.T) {
+	executor := &exectest.MockExecutor{}
+	executor.MockExecuteCommandWithOutputFile = func(command, outputFile string, args ...string) (string, error) {
+		logger.Infof("Command: %s %v", command, args)
+		if args[1] == "crush" && args[2] == "ls" {
+			return "[\"osd.2\",\"osd.0\",\"osd.1\"]", nil
+		}
+		return "", errors.Errorf("unexpected ceph command '%v'", args)
+	}
+
+	_, err := GetOSDOnHost(&clusterd.Context{Executor: executor}, AdminClusterInfo("mycluster"), "my-host")
+	assert.Nil(t, err)
 }
 
 func TestCrushName(t *testing.T) {
@@ -279,4 +293,9 @@ func TestCrushName(t *testing.T) {
 			assert.False(t, IsNormalizedCrushNameEqual(normalizedCrushName, differentNormalizedCrushName))
 		}
 	}
+}
+
+func TestBuildCompiledDecompileCRUSHFileName(t *testing.T) {
+	assert.Equal(t, "/tmp/06399022.decompiled", buildDecompileCRUSHFileName("/tmp/06399022"))
+	assert.Equal(t, "/tmp/06399022.compiled", buildCompileCRUSHFileName("/tmp/06399022"))
 }
